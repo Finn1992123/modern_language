@@ -6,6 +6,10 @@ import 'announcements.dart';
 import 'games.dart';
 import 'library.dart';
 import 'payments.dart';
+import 'profile.dart';
+import 'students_menu.dart';
+
+const double _homeCardRadius = 28;
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -17,7 +21,7 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage>
     with SingleTickerProviderStateMixin {
   late final AnimationController _animationController;
-  late final Future<_UserHomeData> _userDataFuture = _loadUserData();
+  late Future<_UserHomeData> _userDataFuture = _loadUserData();
 
   @override
   void initState() {
@@ -50,7 +54,7 @@ class _HomePageState extends State<HomePage>
 
     final studentRows = await supabase
         .from('students')
-        .select('name, gender')
+        .select('id, name, gender')
         .eq('user_id', userRow['id']);
 
     final name = userRow['name'];
@@ -59,12 +63,9 @@ class _HomePageState extends State<HomePage>
     return _UserHomeData(
       name: name is String && name.trim().isNotEmpty ? name.trim() : 'χρήστη',
       role: role is String ? role.trim().toLowerCase() : null,
+      profilePic: _readOptionalText(userRow['profile_pic']),
       students: studentRows.map(_StudentData.fromRow).toList(),
     );
-  }
-
-  Future<void> _signOut() async {
-    await Supabase.instance.client.auth.signOut();
   }
 
   void _openPayments() {
@@ -83,8 +84,12 @@ class _HomePageState extends State<HomePage>
     _openMenuPage(const GamesPage());
   }
 
-  void _openMenuPage(Widget page) {
-    Navigator.of(context).push(
+  void _openProfile() {
+    _openMenuPage(const ProfilePage());
+  }
+
+  Future<void> _openMenuPage(Widget page) async {
+    await Navigator.of(context).push(
       PageRouteBuilder<void>(
         pageBuilder: (context, animation, secondaryAnimation) => page,
         transitionsBuilder: (context, animation, secondaryAnimation, child) {
@@ -104,6 +109,14 @@ class _HomePageState extends State<HomePage>
         },
       ),
     );
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _userDataFuture = _loadUserData();
+    });
   }
 
   Future<Map<String, dynamic>?> _loadLinkedUserRow() async {
@@ -159,22 +172,9 @@ class _HomePageState extends State<HomePage>
                         ),
                       ),
                       const SizedBox(width: 14),
-                      InkWell(
-                        onTap: _signOut,
-                        borderRadius: BorderRadius.circular(28),
-                        child: Container(
-                          width: 56,
-                          height: 56,
-                          decoration: const BoxDecoration(
-                            color: Color.fromARGB(255, 164, 205, 225),
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(
-                            Icons.person_rounded,
-                            color: Colors.white,
-                            size: 52,
-                          ),
-                        ),
+                      ProfilePhotoButton(
+                        imageUrl: userData.profilePic,
+                        onTap: _openProfile,
                       ),
                     ],
                   ),
@@ -316,10 +316,10 @@ class _MenuCard extends StatelessWidget {
         height: 200,
         child: Material(
           color: backgroundColor,
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(_homeCardRadius),
           child: InkWell(
             onTap: onTap,
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(_homeCardRadius),
             child: Padding(
               padding: const EdgeInsets.all(20),
               child: Column(
@@ -363,7 +363,7 @@ class _TeacherMenuCard extends StatelessWidget {
       child: DecoratedBox(
         decoration: BoxDecoration(
           color: const Color(0xFF627DE4),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(_homeCardRadius),
         ),
         child: const Padding(
           padding: EdgeInsets.all(18),
@@ -418,6 +418,20 @@ class _StudentPage extends StatelessWidget {
 
   final _StudentData student;
 
+  void _openStudentsMenu(BuildContext context, String asset, Color textColor) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => StudentsMenuPage(
+          studentId: student.id,
+          studentName: student.name,
+          riveAsset: asset,
+          heroTag: student.heroTag,
+          accentColor: textColor,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isFemale = student.gender == 'f';
@@ -429,30 +443,40 @@ class _StudentPage extends StatelessWidget {
     return Column(
       children: [
         Expanded(
-          child: RiveAnimation.asset(
-            asset,
-            fit: BoxFit.contain,
-            animations: const ['Bounce'],
-          ),
-        ),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.34),
-            borderRadius: BorderRadius.circular(36),
-            border: Border.all(
-              color: Colors.white.withValues(alpha: 0.55),
-              width: 1.2,
+          child: Hero(
+            tag: student.heroTag,
+            child: RiveAnimation.asset(
+              asset,
+              fit: BoxFit.contain,
+              animations: const ['Bounce'],
             ),
           ),
-          child: Text(
-            'Πατήστε για τον ${student.name}',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: textColor,
-              fontSize: 18,
-              fontWeight: FontWeight.w800,
+        ),
+        Material(
+          color: Colors.white.withValues(alpha: 0.34),
+          borderRadius: BorderRadius.circular(36),
+          child: InkWell(
+            onTap: () => _openStudentsMenu(context, asset, textColor),
+            borderRadius: BorderRadius.circular(36),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(36),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.55),
+                  width: 1.2,
+                ),
+              ),
+              child: Text(
+                'Πατήστε για τον ${student.name}',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: textColor,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
             ),
           ),
         ),
@@ -465,27 +489,46 @@ class _UserHomeData {
   const _UserHomeData({
     this.name = 'χρήστη',
     this.role,
+    this.profilePic,
     this.students = const [],
   });
 
   final String name;
   final String? role;
+  final String? profilePic;
   final List<_StudentData> students;
 }
 
 class _StudentData {
-  const _StudentData({required this.name, required this.gender});
+  const _StudentData({
+    required this.id,
+    required this.name,
+    required this.gender,
+  });
 
   factory _StudentData.fromRow(Map<String, dynamic> row) {
+    final id = row['id'];
     final name = row['name'];
     final gender = row['gender'];
 
     return _StudentData(
+      id: id is String ? id : '',
       name: name is String && name.trim().isNotEmpty ? name.trim() : 'μαθητή',
       gender: gender is String ? gender.trim().toLowerCase() : 'm',
     );
   }
 
+  final String id;
   final String name;
   final String gender;
+
+  String get heroTag => 'student-rive-$gender-$name';
+}
+
+String? _readOptionalText(Object? value) {
+  if (value is String && value.trim().isNotEmpty) {
+    return value.trim();
+  }
+
+  return null;
 }

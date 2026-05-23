@@ -36,6 +36,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   rive: ^0.13.20
   supabase_flutter: ^2.12.4
+  image_picker: ^1.2.2
 
 dev_dependencies:
   flutter_test:
@@ -63,6 +64,10 @@ flutter:
     - lib/img/blueball.riv
     - lib/img/pinkball.riv
     - lib/img/logoTransp.png
+    - lib/img/uk.png
+    - lib/img/spanish.png
+    - lib/img/french.png
+    - lib/img/germany.png
 
   # To add assets to your application, add an assets section, like this:
   # assets:
