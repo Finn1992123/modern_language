@@ -1,20 +1,25 @@
 import 'package:flutter/material.dart';
-import 'package:rive/rive.dart' show RiveAnimation;
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+import 'myachievements.dart';
+import 'myexercises.dart';
+import 'mygrades.dart';
+import 'myhomework.dart';
+import 'profile.dart';
 
 class StudentsMenuPage extends StatefulWidget {
   const StudentsMenuPage({
     super.key,
     required this.studentId,
     required this.studentName,
-    required this.riveAsset,
+    required this.profilePic,
     required this.heroTag,
     required this.accentColor,
   });
 
   final String studentId;
   final String studentName;
-  final String riveAsset;
+  final String? profilePic;
   final String heroTag;
   final Color accentColor;
 
@@ -43,9 +48,7 @@ class _StudentsMenuPageState extends State<StudentsMenuPage> {
     return rows
         .whereType<Map>()
         .map(
-          (row) => _ClassGradeBreakdown.fromRow(
-            Map<String, dynamic>.from(row),
-          ),
+          (row) => _ClassGradeBreakdown.fromRow(Map<String, dynamic>.from(row)),
         )
         .where((breakdown) => breakdown.language.isNotEmpty)
         .toList()
@@ -84,19 +87,20 @@ class _StudentsMenuPageState extends State<StudentsMenuPage> {
                   ),
                 ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 4),
               SizedBox(
-                height: 320,
-                child: Hero(
-                  tag: widget.heroTag,
-                  child: RiveAnimation.asset(
-                    widget.riveAsset,
-                    fit: BoxFit.contain,
-                    animations: const ['Bounce'],
+                height: 150,
+                child: Center(
+                  child: Hero(
+                    tag: widget.heroTag,
+                    child: CrownedProfilePhoto(
+                      imageUrl: widget.profilePic,
+                      crownTop: -12,
+                    ),
                   ),
                 ),
               ),
-              const SizedBox(height: 18),
+              const SizedBox(height: 10),
               Text(
                 widget.studentName,
                 textAlign: TextAlign.center,
@@ -107,7 +111,7 @@ class _StudentsMenuPageState extends State<StudentsMenuPage> {
                   height: 1.12,
                 ),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 18),
               FutureBuilder<List<_ClassGradeBreakdown>>(
                 future: _gradesFuture,
                 builder: (context, snapshot) {
@@ -139,6 +143,7 @@ class _StudentsMenuPageState extends State<StudentsMenuPage> {
                       for (final breakdown in grades) ...[
                         _GradeBreakdownCard(
                           breakdown: breakdown,
+                          studentId: widget.studentId,
                           accentColor: widget.accentColor,
                         ),
                         const SizedBox(height: 14),
@@ -158,11 +163,56 @@ class _StudentsMenuPageState extends State<StudentsMenuPage> {
 class _GradeBreakdownCard extends StatelessWidget {
   const _GradeBreakdownCard({
     required this.breakdown,
+    required this.studentId,
     required this.accentColor,
   });
 
   final _ClassGradeBreakdown breakdown;
+  final String studentId;
   final Color accentColor;
+
+  void _openMyGrades(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => MyGradesPage(
+          studentId: studentId,
+          classId: breakdown.classId,
+          languageLabel: _languageLabel(breakdown.language),
+        ),
+      ),
+    );
+  }
+
+  void _openMyHomework(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => MyHomeworkPage(
+          studentId: studentId,
+          classId: breakdown.classId,
+          languageLabel: _languageLabel(breakdown.language),
+        ),
+      ),
+    );
+  }
+
+  void _openMyAchievements(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => MyAchievementsPage(
+          languageLabel: _languageLabel(breakdown.language),
+        ),
+      ),
+    );
+  }
+
+  void _openMyExercises(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) =>
+            MyExercisesPage(languageLabel: _languageLabel(breakdown.language)),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -228,6 +278,151 @@ class _GradeBreakdownCard extends StatelessWidget {
             accentColor: accentColor,
             isOverall: true,
           ),
+          const SizedBox(height: 16),
+          _LessonActionGrid(
+            onGradesTap: () => _openMyGrades(context),
+            onHomeworkTap: () => _openMyHomework(context),
+            onAchievementsTap: () => _openMyAchievements(context),
+            onExercisesTap: () => _openMyExercises(context),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LessonActionGrid extends StatelessWidget {
+  const _LessonActionGrid({
+    required this.onGradesTap,
+    required this.onHomeworkTap,
+    required this.onAchievementsTap,
+    required this.onExercisesTap,
+  });
+
+  final VoidCallback onGradesTap;
+  final VoidCallback onHomeworkTap;
+  final VoidCallback onAchievementsTap;
+  final VoidCallback onExercisesTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GridView.count(
+      crossAxisCount: 2,
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      mainAxisSpacing: 10,
+      crossAxisSpacing: 10,
+      childAspectRatio: 1.55,
+      children: [
+        _LessonActionTile(
+          label: 'Οι βαθμοί μου',
+          icon: Icons.text_increase_rounded,
+          backgroundColor: const Color(0x9682FE63),
+          foregroundColor: const Color(0xFF2D7D10),
+          onTap: onGradesTap,
+        ),
+        _LessonActionTile(
+          label: 'Τα καθήκοντα μου',
+          icon: Icons.edit_rounded,
+          backgroundColor: const Color(0xFF89ACFF),
+          foregroundColor: const Color(0xFF385DC9),
+          onTap: onHomeworkTap,
+        ),
+        _LessonActionTile(
+          label: 'Επιτεύγματα',
+          icon: Icons.star_rounded,
+          backgroundColor: const Color(0xFFE4D562),
+          foregroundColor: const Color(0xFFCFB010),
+          onTap: onAchievementsTap,
+        ),
+        _LessonActionTile(
+          label: 'Ασκήσεις',
+          icon: Icons.edit_note_rounded,
+          backgroundColor: const Color(0x57FF1010),
+          foregroundColor: const Color(0xFF7D1010),
+          onTap: onExercisesTap,
+        ),
+      ],
+    );
+  }
+}
+
+class _LessonActionTile extends StatelessWidget {
+  const _LessonActionTile({
+    required this.label,
+    required this.icon,
+    required this.backgroundColor,
+    required this.foregroundColor,
+    this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color backgroundColor;
+  final Color foregroundColor;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: backgroundColor,
+      borderRadius: BorderRadius.circular(26),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(26),
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                label,
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: foregroundColor,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w900,
+                  height: 1.08,
+                ),
+              ),
+              const SizedBox(height: 8),
+              _BubblyIcon(icon: icon, color: foregroundColor),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _BubblyIcon extends StatelessWidget {
+  const _BubblyIcon({required this.icon, required this.color});
+
+  final IconData icon;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    const size = 34.0;
+    const offsets = [
+      Offset.zero,
+      Offset(0.7, 0),
+      Offset(-0.7, 0),
+      Offset(0, 0.7),
+    ];
+
+    return SizedBox.square(
+      dimension: 38,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          for (final offset in offsets)
+            Transform.translate(
+              offset: offset,
+              child: Icon(icon, color: color, size: size),
+            ),
         ],
       ),
     );
@@ -268,7 +463,7 @@ class _GradeProgressRow extends StatelessWidget {
               ),
             ),
             Text(
-              value == null ? '-' : value!.toStringAsFixed(1),
+              value == null ? '-' : '${value!.toStringAsFixed(1)}%',
               style: TextStyle(
                 color: color,
                 fontSize: isOverall ? 18 : 14,
@@ -334,6 +529,7 @@ class _InfoPanel extends StatelessWidget {
 
 class _ClassGradeBreakdown {
   const _ClassGradeBreakdown({
+    required this.classId,
     required this.language,
     required this.daysHours,
     required this.reading,
@@ -348,10 +544,12 @@ class _ClassGradeBreakdown {
   });
 
   factory _ClassGradeBreakdown.fromRow(Map<String, dynamic> row) {
+    final classId = row['class_id'];
     final language = row['language'];
     final daysHours = row['days_hours'];
 
     return _ClassGradeBreakdown(
+      classId: classId is String ? classId : '',
       language: language is String ? language.trim().toLowerCase() : '',
       daysHours: daysHours is String && daysHours.trim().isNotEmpty
           ? daysHours.trim()
@@ -368,6 +566,7 @@ class _ClassGradeBreakdown {
     );
   }
 
+  final String classId;
   final String language;
   final String? daysHours;
   final double? reading;
@@ -381,15 +580,15 @@ class _ClassGradeBreakdown {
   final double? overall;
 
   List<_GradeItem> get items => [
-        _GradeItem('Reading', reading),
-        _GradeItem('Vocabulary', vocabulary),
-        _GradeItem('Grammar', grammar),
-        _GradeItem('Writing', writing),
-        _GradeItem('Listening', listening),
-        _GradeItem('Speaking', speaking),
-        _GradeItem('Homework', homework),
-        _GradeItem('Effort', effort),
-      ];
+    _GradeItem('Reading', reading),
+    _GradeItem('Vocabulary', vocabulary),
+    _GradeItem('Grammar', grammar),
+    _GradeItem('Writing', writing),
+    _GradeItem('Listening', listening),
+    _GradeItem('Speaking', speaking),
+    _GradeItem('Homework', homework),
+    _GradeItem('Effort', effort),
+  ];
 }
 
 class _GradeItem {

@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:rive/rive.dart' show RiveAnimation;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'announcements.dart';
@@ -54,7 +53,7 @@ class _HomePageState extends State<HomePage>
 
     final studentRows = await supabase
         .from('students')
-        .select('id, name, gender')
+        .select('id, name, gender, profile_pic')
         .eq('user_id', userRow['id']);
 
     final name = userRow['name'];
@@ -246,7 +245,7 @@ class _HomePageState extends State<HomePage>
                     ),
                   ],
                   if (userData.students.isNotEmpty) ...[
-                    const SizedBox(height: 28),
+                    const SizedBox(height: 14),
                     _StudentsPageView(students: userData.students),
                   ],
                 ],
@@ -390,24 +389,118 @@ class _TeacherMenuCard extends StatelessWidget {
   }
 }
 
-class _StudentsPageView extends StatelessWidget {
+class _StudentsPageView extends StatefulWidget {
   const _StudentsPageView({required this.students});
 
   final List<_StudentData> students;
 
   @override
+  State<_StudentsPageView> createState() => _StudentsPageViewState();
+}
+
+class _StudentsPageViewState extends State<_StudentsPageView> {
+  late final PageController _pageController;
+  int _currentIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _pageController = PageController();
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  void _goToPage(int index) {
+    if (index < 0 || index >= widget.students.length) {
+      return;
+    }
+
+    _pageController.animateToPage(
+      index,
+      duration: const Duration(milliseconds: 420),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final canGoBack = _currentIndex > 0;
+    final canGoForward = _currentIndex < widget.students.length - 1;
+
     return SizedBox(
-      height: 440,
-      child: PageView.builder(
-        itemCount: students.length,
-        controller: PageController(viewportFraction: 0.9),
-        itemBuilder: (context, index) {
-          return Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 6),
-            child: _StudentPage(student: students[index]),
-          );
-        },
+      height: 306,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          PageView.builder(
+            controller: _pageController,
+            itemCount: widget.students.length,
+            onPageChanged: (index) {
+              setState(() {
+                _currentIndex = index;
+              });
+            },
+            itemBuilder: (context, index) {
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 42),
+                child: _StudentPage(student: widget.students[index]),
+              );
+            },
+          ),
+          if (canGoBack)
+            Positioned(
+              left: 0,
+              top: 96,
+              child: _StudentCarouselArrow(
+                icon: Icons.chevron_left_rounded,
+                onTap: () => _goToPage(_currentIndex - 1),
+              ),
+            ),
+          if (canGoForward)
+            Positioned(
+              right: 0,
+              top: 96,
+              child: _StudentCarouselArrow(
+                icon: Icons.chevron_right_rounded,
+                onTap: () => _goToPage(_currentIndex + 1),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StudentCarouselArrow extends StatelessWidget {
+  const _StudentCarouselArrow({
+    required this.icon,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white.withValues(alpha: 0.44),
+      shape: const CircleBorder(),
+      child: InkWell(
+        onTap: onTap,
+        customBorder: const CircleBorder(),
+        child: SizedBox(
+          width: 42,
+          height: 42,
+          child: Icon(
+            icon,
+            color: const Color(0xFF173A8A),
+            size: 34,
+          ),
+        ),
       ),
     );
   }
@@ -418,13 +511,13 @@ class _StudentPage extends StatelessWidget {
 
   final _StudentData student;
 
-  void _openStudentsMenu(BuildContext context, String asset, Color textColor) {
+  void _openStudentsMenu(BuildContext context, Color textColor) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (context) => StudentsMenuPage(
           studentId: student.id,
           studentName: student.name,
-          riveAsset: asset,
+          profilePic: student.profilePic,
           heroTag: student.heroTag,
           accentColor: textColor,
         ),
@@ -435,28 +528,31 @@ class _StudentPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isFemale = student.gender == 'f';
-    final asset = isFemale ? 'lib/img/pinkball.riv' : 'lib/img/blueball.riv';
     final textColor = isFemale
-        ? const Color(0xFFE91E63)
+        ? const Color.fromARGB(255, 235, 93, 150)
         : const Color(0xFF173A8A);
+    final article = isFemale ? '\u03C4\u03B7\u03BD' : '\u03C4\u03BF\u03BD';
 
     return Column(
       children: [
-        Expanded(
-          child: Hero(
-            tag: student.heroTag,
-            child: RiveAnimation.asset(
-              asset,
-              fit: BoxFit.contain,
-              animations: const ['Bounce'],
+        SizedBox(
+          height: 200,
+          child: Align(
+            alignment: Alignment.bottomCenter,
+            child: Hero(
+              tag: student.heroTag,
+              child: CrownedProfilePhoto(
+                imageUrl: student.profilePic,
+              ),
             ),
           ),
         ),
+        const SizedBox(height: 16),
         Material(
           color: Colors.white.withValues(alpha: 0.34),
           borderRadius: BorderRadius.circular(36),
           child: InkWell(
-            onTap: () => _openStudentsMenu(context, asset, textColor),
+            onTap: () => _openStudentsMenu(context, textColor),
             borderRadius: BorderRadius.circular(36),
             child: Container(
               width: double.infinity,
@@ -469,7 +565,7 @@ class _StudentPage extends StatelessWidget {
                 ),
               ),
               child: Text(
-                'Πατήστε για τον ${student.name}',
+                '\u03A0\u03B1\u03C4\u03AE\u03C3\u03C4\u03B5 \u03B3\u03B9\u03B1 $article ${student.name}',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: textColor,
@@ -504,6 +600,7 @@ class _StudentData {
     required this.id,
     required this.name,
     required this.gender,
+    this.profilePic,
   });
 
   factory _StudentData.fromRow(Map<String, dynamic> row) {
@@ -515,14 +612,17 @@ class _StudentData {
       id: id is String ? id : '',
       name: name is String && name.trim().isNotEmpty ? name.trim() : 'μαθητή',
       gender: gender is String ? gender.trim().toLowerCase() : 'm',
+      profilePic: _readOptionalText(row['profile_pic']),
     );
   }
 
   final String id;
   final String name;
   final String gender;
+  final String? profilePic;
 
-  String get heroTag => 'student-rive-$gender-$name';
+  String get heroTag =>
+      id.isEmpty ? 'student-profile-$gender-$name' : 'student-profile-$id';
 }
 
 String? _readOptionalText(Object? value) {

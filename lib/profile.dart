@@ -530,6 +530,47 @@ class ProfilePhotoButton extends StatelessWidget {
   }
 }
 
+class CrownedProfilePhoto extends StatelessWidget {
+  const CrownedProfilePhoto({
+    super.key,
+    this.imageUrl,
+    this.crownTop = 0,
+  });
+
+  final String? imageUrl;
+  final double crownTop;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 154,
+      height: 164,
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.bottomCenter,
+        children: [
+          ProfilePhotoButton(
+            imageUrl: imageUrl,
+            size: 130,
+          ),
+          Positioned(
+            top: crownTop,
+            right: 22,
+            child: Transform.rotate(
+              angle: 0.18,
+              child: Image.asset(
+                'lib/img/crown.png',
+                width: 70,
+                fit: BoxFit.contain,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ProfileActionButton extends StatelessWidget {
   const _ProfileActionButton({
     required this.icon,
