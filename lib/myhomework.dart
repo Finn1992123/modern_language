@@ -90,6 +90,7 @@ class _MyHomeworkPageState extends State<MyHomeworkPage> {
           _rows.addAll(nextRows);
         }
 
+        _rows.sort(_compareCreatedAtNewestFirst);
         _hasMore = nextRows.length == _pageSize;
         _isInitialLoading = false;
         _isLoadingMore = false;
@@ -105,6 +106,120 @@ class _MyHomeworkPageState extends State<MyHomeworkPage> {
         _isLoadingMore = false;
       });
     }
+  }
+
+  Future<List<_CurriculumRow>> _loadUpcomingHomework() async {
+    if (widget.studentId.isEmpty || widget.classId.isEmpty) {
+      return <_CurriculumRow>[];
+    }
+
+    final rows = await Supabase.instance.client.rpc(
+      'get_student_upcoming_curriculum_rows',
+      params: {
+        'input_student_id': widget.studentId,
+        'input_class_id': widget.classId,
+        'input_from_date': _formatIsoDate(DateTime.now()),
+      },
+    );
+
+    return rows is List
+        ? rows
+              .whereType<Map>()
+              .map(
+                (row) => _CurriculumRow.fromRow(Map<String, dynamic>.from(row)),
+              )
+              .toList()
+        : <_CurriculumRow>[];
+  }
+
+  void _showUpcomingHomeworkDialog() {
+    final upcomingHomeworkFuture = _loadUpcomingHomework();
+
+    showDialog<void>(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          backgroundColor: Colors.white,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 22),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(28),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 620),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 22),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: InkWell(
+                      onTap: () => Navigator.of(context).pop(),
+                      borderRadius: BorderRadius.circular(18),
+                      child: const SizedBox(
+                        width: 36,
+                        height: 36,
+                        child: Icon(
+                          Icons.close_rounded,
+                          color: Color(0xFF9AA0A9),
+                          size: 24,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const Text(
+                    'Τα επόμενα καθήκοντα μου',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: _contentColor,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w900,
+                      height: 1.12,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Flexible(
+                    child: FutureBuilder<List<_CurriculumRow>>(
+                      future: upcomingHomeworkFuture,
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState != ConnectionState.done) {
+                          return const Center(
+                            child: Padding(
+                              padding: EdgeInsets.symmetric(vertical: 44),
+                              child: CircularProgressIndicator(),
+                            ),
+                          );
+                        }
+
+                        if (snapshot.hasError) {
+                          return _HomeworkMessage(
+                            text:
+                                'Δεν μπορέσαμε να φορτώσουμε τα επόμενα καθήκοντα.',
+                            color: Colors.grey.shade700,
+                          );
+                        }
+
+                        final rows = snapshot.data ?? <_CurriculumRow>[];
+                        if (rows.isEmpty) {
+                          return _HomeworkMessage(
+                            text: 'Δεν υπάρχουν επόμενα καθήκοντα.',
+                            color: Colors.grey.shade600,
+                          );
+                        }
+
+                        return _UpcomingHomeworkList(rows: rows);
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   @override
@@ -196,26 +311,35 @@ class _MyHomeworkPageState extends State<MyHomeworkPage> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(0, 22, 0, 30),
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+        Wrap(
+          alignment: WrapAlignment.center,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 12,
+          runSpacing: 10,
           children: [
-            Image.asset(
-              _languageFlagAsset(widget.languageLabel),
-              width: 30,
-              height: 30,
-              fit: BoxFit.contain,
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Image.asset(
+                  _languageFlagAsset(widget.languageLabel),
+                  width: 30,
+                  height: 30,
+                  fit: BoxFit.contain,
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  widget.languageLabel,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Color(0xFF173A8A),
+                    fontSize: 22,
+                    fontWeight: FontWeight.w900,
+                    height: 1.1,
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(width: 10),
-            Text(
-              widget.languageLabel,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: Color(0xFF173A8A),
-                fontSize: 22,
-                fontWeight: FontWeight.w900,
-                height: 1.1,
-              ),
-            ),
+            _UpcomingHomeworkButton(onTap: _showUpcomingHomeworkDialog),
           ],
         ),
         const SizedBox(height: 16),
@@ -234,6 +358,85 @@ class _MyHomeworkPageState extends State<MyHomeworkPage> {
           ),
         ],
       ],
+    );
+  }
+}
+
+class _UpcomingHomeworkButton extends StatelessWidget {
+  const _UpcomingHomeworkButton({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextButton.icon(
+      onPressed: onTap,
+      icon: const Icon(Icons.event_available_rounded, size: 18),
+      label: const Text('Τα επόμενα καθήκοντα μου'),
+      style: TextButton.styleFrom(
+        foregroundColor: _MyHomeworkPageState._contentColor,
+        backgroundColor: const Color(0xFFEAF0FF),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        textStyle: const TextStyle(
+          fontSize: 12.5,
+          fontWeight: FontWeight.w900,
+          height: 1.1,
+        ),
+      ),
+    );
+  }
+}
+
+class _UpcomingHomeworkList extends StatelessWidget {
+  const _UpcomingHomeworkList({required this.rows});
+
+  final List<_CurriculumRow> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView.separated(
+      shrinkWrap: true,
+      itemCount: rows.length,
+      separatorBuilder: (context, index) => const SizedBox(height: 10),
+      itemBuilder: (context, index) {
+        final row = rows[index];
+        return DecoratedBox(
+          decoration: BoxDecoration(
+            color: const Color(0xFFF7F9FF),
+            border: Border.all(color: const Color(0xFFE4E9FA)),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Για ${row.formattedDate}',
+                  style: const TextStyle(
+                    color: _MyHomeworkPageState._contentColor,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                    height: 1.1,
+                  ),
+                ),
+                const SizedBox(height: 7),
+                Text(
+                  row.homework ?? '-',
+                  style: const TextStyle(
+                    color: Color(0xFF313A2E),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    height: 1.28,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -442,6 +645,23 @@ class _CurriculumRow {
   String get formattedDate => _formatShortDate(forDate);
 }
 
+int _compareCreatedAtNewestFirst(_CurriculumRow a, _CurriculumRow b) {
+  final aCreatedAt = a.createdAt;
+  final bCreatedAt = b.createdAt;
+
+  if (aCreatedAt == null && bCreatedAt == null) {
+    return 0;
+  }
+  if (aCreatedAt == null) {
+    return 1;
+  }
+  if (bCreatedAt == null) {
+    return -1;
+  }
+
+  return bCreatedAt.compareTo(aCreatedAt);
+}
+
 String _formatShortDate(DateTime? date) {
   if (date == null) {
     return '-';
@@ -449,6 +669,12 @@ String _formatShortDate(DateTime? date) {
 
   final year = (date.year % 100).toString().padLeft(2, '0');
   return '${date.day}/${date.month}/$year';
+}
+
+String _formatIsoDate(DateTime date) {
+  final month = date.month.toString().padLeft(2, '0');
+  final day = date.day.toString().padLeft(2, '0');
+  return '${date.year}-$month-$day';
 }
 
 String? _readOptionalText(Object? value) {

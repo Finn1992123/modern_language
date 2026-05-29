@@ -7,6 +7,7 @@ import 'library.dart';
 import 'payments.dart';
 import 'profile.dart';
 import 'students_menu.dart';
+import 'teachers_menu.dart';
 
 const double _homeCardRadius = 28;
 
@@ -68,26 +69,30 @@ class _HomePageState extends State<HomePage>
   }
 
   void _openPayments() {
-    _openMenuPage(const PaymentsPage());
+    _openMenuPage(const PaymentsPage(), refreshOnReturn: false);
   }
 
   void _openLibrary() {
-    _openMenuPage(const LibraryPage());
+    _openMenuPage(const LibraryPage(), refreshOnReturn: false);
   }
 
   void _openAnnouncements() {
-    _openMenuPage(const AnnouncementsPage());
+    _openMenuPage(const AnnouncementsPage(), refreshOnReturn: false);
   }
 
   void _openGames() {
-    _openMenuPage(const GamesPage());
+    _openMenuPage(const GamesPage(), refreshOnReturn: false);
   }
 
   void _openProfile() {
     _openMenuPage(const ProfilePage());
   }
 
-  Future<void> _openMenuPage(Widget page) async {
+  void _openTeachersMenu() {
+    _openMenuPage(const TeachersMenuPage(), refreshOnReturn: false);
+  }
+
+  Future<void> _openMenuPage(Widget page, {bool refreshOnReturn = true}) async {
     await Navigator.of(context).push(
       PageRouteBuilder<void>(
         pageBuilder: (context, animation, secondaryAnimation) => page,
@@ -109,7 +114,7 @@ class _HomePageState extends State<HomePage>
       ),
     );
 
-    if (!mounted) {
+    if (!mounted || !refreshOnReturn) {
       return;
     }
 
@@ -150,10 +155,45 @@ class _HomePageState extends State<HomePage>
           child: FutureBuilder<_UserHomeData>(
             future: _userDataFuture,
             builder: (context, snapshot) {
+              if (snapshot.connectionState != ConnectionState.done) {
+                return const Center(child: CircularProgressIndicator());
+              }
+
+              if (snapshot.hasError) {
+                return Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.error_outline_rounded, size: 42),
+                        const SizedBox(height: 12),
+                        const Text(
+                          'Δεν μπορέσαμε να φορτώσουμε τα στοιχεία σου.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        FilledButton(
+                          onPressed: () {
+                            setState(() {
+                              _userDataFuture = _loadUserData();
+                            });
+                          },
+                          child: const Text('Δοκιμή ξανά'),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }
+
               final userData = snapshot.data ?? const _UserHomeData();
               final showTeacherMenu =
                   userData.role == 'teacher' || userData.role == 'headteacher';
-              final showPayments = !showTeacherMenu;
 
               return ListView(
                 padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
@@ -186,21 +226,20 @@ class _HomePageState extends State<HomePage>
                     crossAxisSpacing: 18,
                     childAspectRatio: 1,
                     children: [
-                      if (showPayments)
-                        _AnimatedMenuCard(
-                          controller: _animationController,
-                          index: 0,
-                          child: _MenuCard(
-                            title: 'Πληρωμές',
-                            icon: Icons.savings_rounded,
-                            backgroundColor: const Color(0x9FF9FF89),
-                            contentColor: const Color(0xFFDB9538),
-                            onTap: _openPayments,
-                          ),
-                        ),
                       _AnimatedMenuCard(
                         controller: _animationController,
-                        index: showPayments ? 1 : 0,
+                        index: 0,
+                        child: _MenuCard(
+                          title: 'Πληρωμές',
+                          icon: Icons.savings_rounded,
+                          backgroundColor: const Color(0x9FF9FF89),
+                          contentColor: const Color(0xFFDB9538),
+                          onTap: _openPayments,
+                        ),
+                      ),
+                      _AnimatedMenuCard(
+                        controller: _animationController,
+                        index: 1,
                         child: _MenuCard(
                           title: 'Βιβλία/Άρθρα',
                           icon: Icons.menu_book_rounded,
@@ -211,7 +250,7 @@ class _HomePageState extends State<HomePage>
                       ),
                       _AnimatedMenuCard(
                         controller: _animationController,
-                        index: showPayments ? 2 : 1,
+                        index: 2,
                         child: _MenuCard(
                           title: 'Ανακοινώσεις',
                           icon: Icons.campaign_rounded,
@@ -222,7 +261,7 @@ class _HomePageState extends State<HomePage>
                       ),
                       _AnimatedMenuCard(
                         controller: _animationController,
-                        index: showPayments ? 3 : 2,
+                        index: 3,
                         child: _MenuCard(
                           title: 'Παιχνίδια',
                           icon: Icons.sports_esports_rounded,
@@ -240,7 +279,7 @@ class _HomePageState extends State<HomePage>
                       child: _AnimatedMenuCard(
                         controller: _animationController,
                         index: 4,
-                        child: const _TeacherMenuCard(),
+                        child: _TeacherMenuCard(onTap: _openTeachersMenu),
                       ),
                     ),
                   ],
@@ -350,7 +389,9 @@ class _MenuCard extends StatelessWidget {
 }
 
 class _TeacherMenuCard extends StatelessWidget {
-  const _TeacherMenuCard();
+  const _TeacherMenuCard({required this.onTap});
+
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -359,29 +400,31 @@ class _TeacherMenuCard extends StatelessWidget {
     return SizedBox(
       width: 350,
       height: 122,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: const Color(0xFF627DE4),
+      child: Material(
+        color: const Color(0xFF627DE4),
+        borderRadius: BorderRadius.circular(_homeCardRadius),
+        child: InkWell(
+          onTap: onTap,
           borderRadius: BorderRadius.circular(_homeCardRadius),
-        ),
-        child: const Padding(
-          padding: EdgeInsets.all(18),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.start,
-            children: [
-              Text(
-                'Μενού Καθηγητών',
-                textAlign: TextAlign.left,
-                style: TextStyle(
-                  color: contentColor,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w800,
+          child: const Padding(
+            padding: EdgeInsets.all(18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.start,
+              children: [
+                Text(
+                  'Μενού Καθηγητών',
+                  textAlign: TextAlign.left,
+                  style: TextStyle(
+                    color: contentColor,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
-              ),
-              SizedBox(height: 8),
-              Icon(Icons.co_present_rounded, color: contentColor, size: 48),
-            ],
+                SizedBox(height: 8),
+                Icon(Icons.co_present_rounded, color: contentColor, size: 48),
+              ],
+            ),
           ),
         ),
       ),
@@ -476,10 +519,7 @@ class _StudentsPageViewState extends State<_StudentsPageView> {
 }
 
 class _StudentCarouselArrow extends StatelessWidget {
-  const _StudentCarouselArrow({
-    required this.icon,
-    required this.onTap,
-  });
+  const _StudentCarouselArrow({required this.icon, required this.onTap});
 
   final IconData icon;
   final VoidCallback onTap;
@@ -495,11 +535,7 @@ class _StudentCarouselArrow extends StatelessWidget {
         child: SizedBox(
           width: 42,
           height: 42,
-          child: Icon(
-            icon,
-            color: const Color(0xFF173A8A),
-            size: 34,
-          ),
+          child: Icon(icon, color: const Color(0xFF173A8A), size: 34),
         ),
       ),
     );
@@ -541,9 +577,7 @@ class _StudentPage extends StatelessWidget {
             alignment: Alignment.bottomCenter,
             child: Hero(
               tag: student.heroTag,
-              child: CrownedProfilePhoto(
-                imageUrl: student.profilePic,
-              ),
+              child: CrownedProfilePhoto(imageUrl: student.profilePic),
             ),
           ),
         ),
