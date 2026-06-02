@@ -37,6 +37,10 @@
 	<true/>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Χρειαζόμαστε πρόσβαση στις φωτογραφίες για να επιλέξετε φωτογραφία προφίλ.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Χρειαζόμαστε πρόσβαση στο μικρόφωνο για τις προφορικές ασκήσεις λεξιλογίου.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Χρειαζόμαστε αναγνώριση ομιλίας για να ελέγχονται οι προφορικές απαντήσεις.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

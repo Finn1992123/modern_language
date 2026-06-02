@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'announcements.dart';
-import 'games.dart';
 import 'library.dart';
 import 'payments.dart';
 import 'profile.dart';
@@ -78,10 +77,6 @@ class _HomePageState extends State<HomePage>
 
   void _openAnnouncements() {
     _openMenuPage(const AnnouncementsPage(), refreshOnReturn: false);
-  }
-
-  void _openGames() {
-    _openMenuPage(const GamesPage(), refreshOnReturn: false);
   }
 
   void _openProfile() {
@@ -259,17 +254,6 @@ class _HomePageState extends State<HomePage>
                           onTap: _openAnnouncements,
                         ),
                       ),
-                      _AnimatedMenuCard(
-                        controller: _animationController,
-                        index: 3,
-                        child: _MenuCard(
-                          title: 'Παιχνίδια',
-                          icon: Icons.sports_esports_rounded,
-                          backgroundColor: const Color(0xFF4D4AAD),
-                          contentColor: const Color(0xFF18A8EF),
-                          onTap: _openGames,
-                        ),
-                      ),
                     ],
                   ),
                   if (showTeacherMenu) ...[
@@ -278,7 +262,7 @@ class _HomePageState extends State<HomePage>
                       alignment: Alignment.centerLeft,
                       child: _AnimatedMenuCard(
                         controller: _animationController,
-                        index: 4,
+                        index: 3,
                         child: _TeacherMenuCard(onTap: _openTeachersMenu),
                       ),
                     ),

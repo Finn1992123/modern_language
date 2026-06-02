@@ -24,6 +24,10 @@
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>$(PRODUCT_COPYRIGHT)</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Χρειαζόμαστε πρόσβαση στο μικρόφωνο για τις προφορικές ασκήσεις λεξιλογίου.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Χρειαζόμαστε αναγνώριση ομιλίας για να ελέγχονται οι προφορικές απαντήσεις.</string>
 	<key>NSMainNibFile</key>
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'games.dart';
 import 'myachievements.dart';
 import 'myexercises.dart';
 import 'mygrades.dart';
@@ -214,6 +215,18 @@ class _GradeBreakdownCard extends StatelessWidget {
     );
   }
 
+  void _openGames(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => GamesPage(
+          studentId: studentId,
+          classId: breakdown.classId,
+          languageLabel: _languageLabel(breakdown.language),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -284,6 +297,7 @@ class _GradeBreakdownCard extends StatelessWidget {
             onHomeworkTap: () => _openMyHomework(context),
             onAchievementsTap: () => _openMyAchievements(context),
             onExercisesTap: () => _openMyExercises(context),
+            onGamesTap: () => _openGames(context),
           ),
         ],
       ),
@@ -297,50 +311,65 @@ class _LessonActionGrid extends StatelessWidget {
     required this.onHomeworkTap,
     required this.onAchievementsTap,
     required this.onExercisesTap,
+    required this.onGamesTap,
   });
 
   final VoidCallback onGradesTap;
   final VoidCallback onHomeworkTap;
   final VoidCallback onAchievementsTap;
   final VoidCallback onExercisesTap;
+  final VoidCallback onGamesTap;
 
   @override
   Widget build(BuildContext context) {
-    return GridView.count(
-      crossAxisCount: 2,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      mainAxisSpacing: 10,
-      crossAxisSpacing: 10,
-      childAspectRatio: 1.55,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _LessonActionTile(
-          label: 'Οι βαθμοί μου',
-          icon: Icons.text_increase_rounded,
-          backgroundColor: const Color(0x9682FE63),
-          foregroundColor: const Color(0xFF2D7D10),
-          onTap: onGradesTap,
+        GridView.count(
+          crossAxisCount: 2,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          mainAxisSpacing: 10,
+          crossAxisSpacing: 10,
+          childAspectRatio: 1.55,
+          children: [
+            _LessonActionTile(
+              label: 'Οι βαθμοί μου',
+              icon: Icons.text_increase_rounded,
+              backgroundColor: const Color(0x9682FE63),
+              foregroundColor: const Color(0xFF2D7D10),
+              onTap: onGradesTap,
+            ),
+            _LessonActionTile(
+              label: 'Τα καθήκοντα μου',
+              icon: Icons.edit_rounded,
+              backgroundColor: const Color(0xFF89ACFF),
+              foregroundColor: const Color(0xFF385DC9),
+              onTap: onHomeworkTap,
+            ),
+            _LessonActionTile(
+              label: 'Επιτεύγματα',
+              icon: Icons.star_rounded,
+              backgroundColor: const Color(0xFFE4D562),
+              foregroundColor: const Color(0xFFCFB010),
+              onTap: onAchievementsTap,
+            ),
+            _LessonActionTile(
+              label: 'Ασκήσεις',
+              icon: Icons.edit_note_rounded,
+              backgroundColor: const Color(0x57FF1010),
+              foregroundColor: const Color(0xFF7D1010),
+              onTap: onExercisesTap,
+            ),
+          ],
         ),
-        _LessonActionTile(
-          label: 'Τα καθήκοντα μου',
-          icon: Icons.edit_rounded,
-          backgroundColor: const Color(0xFF89ACFF),
-          foregroundColor: const Color(0xFF385DC9),
-          onTap: onHomeworkTap,
-        ),
-        _LessonActionTile(
-          label: 'Επιτεύγματα',
-          icon: Icons.star_rounded,
-          backgroundColor: const Color(0xFFE4D562),
-          foregroundColor: const Color(0xFFCFB010),
-          onTap: onAchievementsTap,
-        ),
-        _LessonActionTile(
-          label: 'Ασκήσεις',
-          icon: Icons.edit_note_rounded,
-          backgroundColor: const Color(0x57FF1010),
-          foregroundColor: const Color(0xFF7D1010),
-          onTap: onExercisesTap,
+        const SizedBox(height: 10),
+        _LessonActionButton(
+          label: 'Παιχνίδια',
+          icon: Icons.sports_esports_rounded,
+          backgroundColor: const Color(0xFF4D4AAD),
+          foregroundColor: const Color(0xFF18A8EF),
+          onTap: onGamesTap,
         ),
       ],
     );
@@ -392,6 +421,37 @@ class _LessonActionTile extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _LessonActionButton extends StatelessWidget {
+  const _LessonActionButton({
+    required this.label,
+    required this.icon,
+    required this.backgroundColor,
+    required this.foregroundColor,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color backgroundColor;
+  final Color foregroundColor;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return FilledButton.icon(
+      onPressed: onTap,
+      icon: Icon(icon),
+      label: Text(label),
+      style: FilledButton.styleFrom(
+        backgroundColor: backgroundColor,
+        foregroundColor: foregroundColor,
+        padding: const EdgeInsets.symmetric(vertical: 15),
+        textStyle: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
       ),
     );
   }
