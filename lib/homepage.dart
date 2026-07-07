@@ -83,8 +83,8 @@ class _HomePageState extends State<HomePage>
     _openMenuPage(const ProfilePage());
   }
 
-  void _openTeachersMenu() {
-    _openMenuPage(const TeachersMenuPage(), refreshOnReturn: false);
+  void _openTeachersMenu(String? role) {
+    _openMenuPage(TeachersMenuPage(role: role), refreshOnReturn: false);
   }
 
   Future<void> _openMenuPage(Widget page, {bool refreshOnReturn = true}) async {
@@ -263,7 +263,9 @@ class _HomePageState extends State<HomePage>
                       child: _AnimatedMenuCard(
                         controller: _animationController,
                         index: 3,
-                        child: _TeacherMenuCard(onTap: _openTeachersMenu),
+                        child: _TeacherMenuCard(
+                          onTap: () => _openTeachersMenu(userData.role),
+                        ),
                       ),
                     ),
                   ],
@@ -351,7 +353,7 @@ class _MenuCard extends StatelessWidget {
                   Text(
                     title,
                     textAlign: TextAlign.left,
-                    maxLines: 1,
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       color: contentColor,
@@ -382,8 +384,8 @@ class _TeacherMenuCard extends StatelessWidget {
     const contentColor = Color(0xFF5AFF87);
 
     return SizedBox(
-      width: 350,
-      height: 122,
+      width: 370,
+      height: 140,
       child: Material(
         color: const Color(0xFF627DE4),
         borderRadius: BorderRadius.circular(_homeCardRadius),
@@ -391,7 +393,7 @@ class _TeacherMenuCard extends StatelessWidget {
           onTap: onTap,
           borderRadius: BorderRadius.circular(_homeCardRadius),
           child: const Padding(
-            padding: EdgeInsets.all(18),
+            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.start,
@@ -399,14 +401,17 @@ class _TeacherMenuCard extends StatelessWidget {
                 Text(
                   'Μενού Καθηγητών',
                   textAlign: TextAlign.left,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: contentColor,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
+                    fontSize: 21,
+                    fontWeight: FontWeight.w700,
+                    height: 1.1,
                   ),
                 ),
                 SizedBox(height: 8),
-                Icon(Icons.co_present_rounded, color: contentColor, size: 48),
+                Icon(Icons.co_present_rounded, color: contentColor, size: 64),
               ],
             ),
           ),

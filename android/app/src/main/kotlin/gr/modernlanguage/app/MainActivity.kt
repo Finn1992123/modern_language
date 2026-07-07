@@ -1,4 +1,4 @@
-package com.example.modern_language
+package gr.modernlanguage.app
 
 import io.flutter.embedding.android.FlutterActivity
 

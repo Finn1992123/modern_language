@@ -5,7 +5,9 @@ import 'teacher_classes_page.dart';
 import 'teacher_payments.dart';
 
 class TeachersMenuPage extends StatelessWidget {
-  const TeachersMenuPage({super.key});
+  const TeachersMenuPage({super.key, required this.role});
+
+  final String? role;
 
   static const Color _contentColor = Color(0xFF173A8A);
 
@@ -57,13 +59,15 @@ class TeachersMenuPage extends StatelessWidget {
               color: const Color(0xFF627DE4),
               onTap: () => _openPage(context, const TeacherClassesPage()),
             ),
-            const SizedBox(height: 12),
-            _TeacherMenuButton(
-              label: 'Πληρωμές',
-              icon: Icons.savings_rounded,
-              color: const Color(0xFFDB9538),
-              onTap: () => _openPage(context, const TeacherPaymentsPage()),
-            ),
+            if (role == 'headteacher') ...[
+              const SizedBox(height: 12),
+              _TeacherMenuButton(
+                label: 'Πληρωμές',
+                icon: Icons.savings_rounded,
+                color: const Color(0xFFDB9538),
+                onTap: () => _openPage(context, const TeacherPaymentsPage()),
+              ),
+            ],
             const SizedBox(height: 12),
             _TeacherMenuButton(
               label: 'Τα καθήκοντα',

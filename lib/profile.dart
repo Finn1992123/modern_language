@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'account_deletion_request.dart';
 import 'personal_details.dart';
 
 class ProfilePage extends StatefulWidget {
@@ -28,10 +29,8 @@ class _ProfilePageState extends State<ProfilePage> {
 
     final userId = userRow['id'];
     final role = userRow['role'];
-    final shouldLoadStudents =
-        role is String && role.trim().toLowerCase() == 'parent';
 
-    final studentRows = shouldLoadStudents && userId != null
+    final studentRows = userId != null
         ? await supabase
               .from('students')
               .select('id, name, profile_pic')
@@ -254,10 +253,6 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  void _showComingSoon(String title) {
-    _showMessage(title);
-  }
-
   Future<void> _openPersonalDetails() async {
     final didUpdate = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
@@ -267,6 +262,18 @@ class _ProfilePageState extends State<ProfilePage> {
 
     if (didUpdate == true && mounted) {
       _refresh();
+    }
+  }
+
+  Future<void> _openAccountDeletionRequest() async {
+    final submitted = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (context) => const AccountDeletionRequestPage(),
+      ),
+    );
+
+    if (submitted == true && mounted) {
+      _showMessage('Το αίτημα διαγραφής λογαριασμού καταχωρήθηκε.');
     }
   }
 
@@ -374,7 +381,7 @@ class _ProfilePageState extends State<ProfilePage> {
                       height: 1.1,
                     ),
                   ),
-                  if (data.role == 'parent' && data.students.isNotEmpty) ...[
+                  if (data.students.isNotEmpty) ...[
                     const SizedBox(height: 28),
                     Wrap(
                       alignment: WrapAlignment.center,
@@ -427,7 +434,15 @@ class _ProfilePageState extends State<ProfilePage> {
                   _ProfileActionButton(
                     icon: Icons.notifications_rounded,
                     label: 'Ειδοποιήσεις',
-                    onPressed: () => _showComingSoon('Ειδοποιήσεις'),
+                    onPressed: () =>
+                        _showMessage('Οι ειδοποιήσεις θα συνδεθούν σύντομα.'),
+                  ),
+                  const SizedBox(height: 12),
+                  _ProfileActionButton(
+                    icon: Icons.person_remove_rounded,
+                    label: 'Αίτημα διαγραφής λογαριασμού',
+                    isDestructive: true,
+                    onPressed: _openAccountDeletionRequest,
                   ),
                   const SizedBox(height: 12),
                   _ProfileActionButton(

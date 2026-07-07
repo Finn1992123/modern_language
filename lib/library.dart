@@ -164,7 +164,7 @@ class _LibraryPageState extends State<LibraryPage> {
                       if (book.img != null) ...[
                         ClipRRect(
                           borderRadius: BorderRadius.circular(22),
-                          child: Container(
+                          child: SizedBox(
                             height: 190,
                             child: Image.network(
                               book.img!,
@@ -239,6 +239,9 @@ class _LibraryPageState extends State<LibraryPage> {
                         onPressed: book.availableQuantity <= 0 || isReserving
                             ? null
                             : () async {
+                                final navigator = Navigator.of(dialogContext);
+                                final messenger = ScaffoldMessenger.of(context);
+
                                 setDialogState(() {
                                   isReserving = true;
                                 });
@@ -250,8 +253,8 @@ class _LibraryPageState extends State<LibraryPage> {
                                     return;
                                   }
 
-                                  Navigator.of(dialogContext).pop();
-                                  ScaffoldMessenger.of(context).showSnackBar(
+                                  navigator.pop();
+                                  messenger.showSnackBar(
                                     const SnackBar(
                                       content: Text(
                                         'Το βιβλίο κρατήθηκε με επιτυχία. Διάρκεια: 1 μήνας.',
@@ -266,7 +269,7 @@ class _LibraryPageState extends State<LibraryPage> {
                                   setDialogState(() {
                                     isReserving = false;
                                   });
-                                  ScaffoldMessenger.of(context).showSnackBar(
+                                  messenger.showSnackBar(
                                     const SnackBar(
                                       content: Text(
                                         'Δεν μπορέσαμε να κρατήσουμε το βιβλίο.',
@@ -351,7 +354,7 @@ class _LibraryPageState extends State<LibraryPage> {
                   if (article.img != null) ...[
                     ClipRRect(
                       borderRadius: BorderRadius.circular(22),
-                      child: Container(
+                      child: SizedBox(
                         height: 160,
                         child: Image.network(
                           article.img!,

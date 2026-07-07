@@ -161,10 +161,12 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
     });
 
     await _speech.listen(
-      localeId: _speechLanguage(language),
-      listenFor: const Duration(seconds: 4),
-      pauseFor: const Duration(seconds: 2),
-      partialResults: true,
+      listenOptions: stt.SpeechListenOptions(
+        localeId: _speechLanguage(language),
+        listenFor: const Duration(seconds: 4),
+        pauseFor: const Duration(seconds: 2),
+        partialResults: true,
+      ),
       onResult: (result) {
         if (!mounted) {
           return;
@@ -601,7 +603,7 @@ class _UnitPicker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return DropdownButtonFormField<String>(
-      value: selectedUnit,
+      initialValue: selectedUnit,
       isExpanded: true,
       decoration: InputDecoration(
         labelText: 'Ενότητα',

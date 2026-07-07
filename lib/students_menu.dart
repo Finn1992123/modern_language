@@ -665,8 +665,7 @@ double _gradeProgress(double? value) {
     return 0;
   }
 
-  final maxGrade = value > 10 ? 100 : 10;
-  return (value / maxGrade).clamp(0.0, 1.0);
+  return (value / 100).clamp(0.0, 1.0);
 }
 
 String _languageFlagAsset(String language) {
