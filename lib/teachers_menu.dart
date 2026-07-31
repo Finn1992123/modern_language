@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'studentscurriculum.dart';
 import 'teacher_classes_page.dart';
+import 'teacher_exercises_page.dart';
 import 'teacher_payments.dart';
 
 class TeachersMenuPage extends StatelessWidget {
@@ -68,6 +69,13 @@ class TeachersMenuPage extends StatelessWidget {
                 onTap: () => _openPage(context, const TeacherPaymentsPage()),
               ),
             ],
+            const SizedBox(height: 12),
+            _TeacherMenuButton(
+              label: 'Δημιουργία άσκησης',
+              icon: Icons.edit_note_rounded,
+              color: const Color(0xFF18A8EF),
+              onTap: () => _openPage(context, const TeacherExercisesPage()),
+            ),
             const SizedBox(height: 12),
             _TeacherMenuButton(
               label: 'Τα καθήκοντα',

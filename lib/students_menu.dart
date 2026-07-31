@@ -206,11 +206,14 @@ class _GradeBreakdownCard extends StatelessWidget {
     );
   }
 
-  void _openMyExercises(BuildContext context) {
-    Navigator.of(context).push(
+  Future<void> _openMyExercises(BuildContext context) async {
+    await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (context) =>
-            MyExercisesPage(languageLabel: _languageLabel(breakdown.language)),
+        builder: (context) => MyExercisesPage(
+          studentId: studentId,
+          classId: breakdown.classId,
+          languageLabel: _languageLabel(breakdown.language),
+        ),
       ),
     );
   }
@@ -293,6 +296,8 @@ class _GradeBreakdownCard extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           _LessonActionGrid(
+            studentId: studentId,
+            classId: breakdown.classId,
             onGradesTap: () => _openMyGrades(context),
             onHomeworkTap: () => _openMyHomework(context),
             onAchievementsTap: () => _openMyAchievements(context),
@@ -307,6 +312,8 @@ class _GradeBreakdownCard extends StatelessWidget {
 
 class _LessonActionGrid extends StatelessWidget {
   const _LessonActionGrid({
+    required this.studentId,
+    required this.classId,
     required this.onGradesTap,
     required this.onHomeworkTap,
     required this.onAchievementsTap,
@@ -314,10 +321,12 @@ class _LessonActionGrid extends StatelessWidget {
     required this.onGamesTap,
   });
 
+  final String studentId;
+  final String classId;
   final VoidCallback onGradesTap;
   final VoidCallback onHomeworkTap;
   final VoidCallback onAchievementsTap;
-  final VoidCallback onExercisesTap;
+  final Future<void> Function() onExercisesTap;
   final VoidCallback onGamesTap;
 
   @override
@@ -354,11 +363,9 @@ class _LessonActionGrid extends StatelessWidget {
               foregroundColor: const Color(0xFFCFB010),
               onTap: onAchievementsTap,
             ),
-            _LessonActionTile(
-              label: 'Ασκήσεις',
-              icon: Icons.edit_note_rounded,
-              backgroundColor: const Color(0x57FF1010),
-              foregroundColor: const Color(0xFF7D1010),
+            _PendingExercisesTile(
+              studentId: studentId,
+              classId: classId,
               onTap: onExercisesTap,
             ),
           ],
@@ -383,6 +390,7 @@ class _LessonActionTile extends StatelessWidget {
     required this.backgroundColor,
     required this.foregroundColor,
     this.onTap,
+    this.counter,
   });
 
   final String label;
@@ -390,37 +398,132 @@ class _LessonActionTile extends StatelessWidget {
   final Color backgroundColor;
   final Color foregroundColor;
   final VoidCallback? onTap;
+  final int? counter;
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: backgroundColor,
-      borderRadius: BorderRadius.circular(26),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(26),
-        child: Padding(
-          padding: const EdgeInsets.all(10),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                label,
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: foregroundColor,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w900,
-                  height: 1.08,
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Positioned.fill(
+          child: Material(
+            color: backgroundColor,
+            borderRadius: BorderRadius.circular(26),
+            child: InkWell(
+              onTap: onTap,
+              borderRadius: BorderRadius.circular(26),
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      label,
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: foregroundColor,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w900,
+                        height: 1.08,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    _BubblyIcon(icon: icon, color: foregroundColor),
+                  ],
                 ),
               ),
-              const SizedBox(height: 8),
-              _BubblyIcon(icon: icon, color: foregroundColor),
-            ],
+            ),
           ),
         ),
+        if (counter != null && counter! > 0)
+          Positioned(
+            top: -7,
+            right: -5,
+            child: Container(
+              constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+              decoration: BoxDecoration(
+                color: const Color(0xFFE32636),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.white, width: 2),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x33000000),
+                    blurRadius: 6,
+                    offset: Offset(0, 2),
+                  ),
+                ],
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                counter! > 99 ? '99+' : '$counter',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _PendingExercisesTile extends StatefulWidget {
+  const _PendingExercisesTile({
+    required this.studentId,
+    required this.classId,
+    required this.onTap,
+  });
+
+  final String studentId;
+  final String classId;
+  final Future<void> Function() onTap;
+
+  @override
+  State<_PendingExercisesTile> createState() => _PendingExercisesTileState();
+}
+
+class _PendingExercisesTileState extends State<_PendingExercisesTile> {
+  late Future<int> _countFuture = _loadCount();
+
+  Future<int> _loadCount() async {
+    final rows = await Supabase.instance.client.rpc(
+      'get_student_exercise_assignments',
+      params: {
+        'input_student_id': widget.studentId,
+        'input_class_id': widget.classId,
+      },
+    );
+    if (rows is! List) return 0;
+    return rows
+        .whereType<Map>()
+        .where((row) => row['completed'] != true)
+        .length;
+  }
+
+  Future<void> _openExercises() async {
+    await widget.onTap();
+    if (!mounted) return;
+    setState(() {
+      _countFuture = _loadCount();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<int>(
+      future: _countFuture,
+      builder: (context, snapshot) => _LessonActionTile(
+        label: 'Ασκήσεις',
+        icon: Icons.edit_note_rounded,
+        backgroundColor: const Color(0x57FF1010),
+        foregroundColor: const Color(0xFF7D1010),
+        counter: snapshot.data,
+        onTap: _openExercises,
       ),
     );
   }

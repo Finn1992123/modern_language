@@ -1,9 +1,13 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_card_swiper/flutter_card_swiper.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+import 'assignment_session.dart';
 
 enum _VocMode { study, speaking, multipleChoice, writeGreek, writeForeign }
 
@@ -13,11 +17,13 @@ class StudyYourVocPage extends StatefulWidget {
     required this.studentId,
     required this.classId,
     required this.languageLabel,
+    this.assignmentSession,
   });
 
   final String studentId;
   final String classId;
   final String languageLabel;
+  final AssignmentSession? assignmentSession;
 
   @override
   State<StudyYourVocPage> createState() => _StudyYourVocPageState();
@@ -27,8 +33,10 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
   late final Future<List<_VocWord>> _wordsFuture = _loadWords();
   final FlutterTts _tts = FlutterTts();
   final stt.SpeechToText _speech = stt.SpeechToText();
+  final CardSwiperController _studySwiperController = CardSwiperController();
   final TextEditingController _answerController = TextEditingController();
   final Random _random = Random();
+  Timer? _studyIndexTimer;
 
   _VocMode? _mode;
   String? _selectedUnit;
@@ -40,14 +48,42 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
   bool _speechReady = false;
   bool _isListening = false;
   bool _speechResultHandled = false;
+  int _speechSessionId = 0;
+  int _ttsSessionId = 0;
   String _spokenText = '';
   bool _importantOnly = false;
+  bool _unitValidationError = false;
   final List<_VocAttempt> _attempts = [];
+  bool _assignmentResultSaved = false;
+  Future<void>? _assignmentSaveFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    final session = widget.assignmentSession;
+    if (session == null) return;
+    final unit = session.settings['unit']?.toString() ?? '';
+    final order = (session.settings['unit_order'] as num?)?.toInt();
+    _selectedUnit = '${order ?? 999999}::$unit';
+    _importantOnly = session.settings['important_only'] == true;
+    _mode = switch (session.settings['mode']?.toString()) {
+      'speaking' => _VocMode.speaking,
+      'multiple_choice' => _VocMode.multipleChoice,
+      'write_foreign' => _VocMode.writeForeign,
+      'write_greek' => _VocMode.writeGreek,
+      _ => _VocMode.multipleChoice,
+    };
+  }
 
   @override
   void dispose() {
+    _studyIndexTimer?.cancel();
+    _speechSessionId++;
+    _ttsSessionId++;
     _answerController.dispose();
+    unawaited(_speech.stop());
     _tts.stop();
+    unawaited(_studySwiperController.dispose());
     super.dispose();
   }
 
@@ -72,8 +108,10 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
   }
 
   void _selectUnit(String? unit) {
+    _studyIndexTimer?.cancel();
     setState(() {
       _selectedUnit = unit;
+      _unitValidationError = false;
       _wordIndex = 0;
       _attempts.clear();
       _resetQuestionState();
@@ -81,8 +119,15 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
   }
 
   void _selectMode(_VocMode? mode) {
+    if (mode != null && _selectedUnit == null) {
+      setState(() => _unitValidationError = true);
+      return;
+    }
+
+    _studyIndexTimer?.cancel();
     setState(() {
       _mode = mode;
+      _unitValidationError = false;
       _wordIndex = 0;
       _attempts.clear();
       _resetQuestionState();
@@ -90,6 +135,10 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
   }
 
   void _resetQuestionState() {
+    _speechSessionId++;
+    _ttsSessionId++;
+    unawaited(_speech.stop());
+    unawaited(_tts.stop());
     _isFlipped = false;
     _lastAnswerCorrect = null;
     _selectedChoice = null;
@@ -115,17 +164,24 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
   }
 
   Future<void> _speak(_VocWord word) async {
+    final sessionId = ++_ttsSessionId;
     final language = word.language.isEmpty
         ? widget.languageLabel
         : word.language;
     await _tts.setLanguage(_ttsLanguage(language));
     await _tts.setSpeechRate(0.42);
     await _tts.setPitch(1);
+
+    if (sessionId != _ttsSessionId) {
+      return;
+    }
+
     await _tts.speak(word.word);
   }
 
   Future<void> _toggleListening(_VocWord word) async {
     if (_isListening) {
+      _speechSessionId++;
       await _speech.stop();
       if (!mounted) {
         return;
@@ -134,8 +190,9 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
       return;
     }
 
+    final sessionId = ++_speechSessionId;
     final ready = _speechReady || await _speech.initialize();
-    if (!mounted) {
+    if (!mounted || sessionId != _speechSessionId) {
       return;
     }
 
@@ -156,7 +213,9 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
       _speechReady = true;
       _isListening = true;
       _speechResultHandled = false;
-      _lastAnswerCorrect = null;
+      if (_lastAnswerCorrect != false) {
+        _lastAnswerCorrect = null;
+      }
       _spokenText = '';
     });
 
@@ -168,7 +227,7 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
         partialResults: true,
       ),
       onResult: (result) {
-        if (!mounted) {
+        if (!mounted || sessionId != _speechSessionId) {
           return;
         }
 
@@ -187,6 +246,11 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
             _spokenText = recognized;
             _isListening = false;
             _lastAnswerCorrect = true;
+            _recordFirstSpeakingAttempt(
+              word: word,
+              userAnswer: recognized,
+              correct: true,
+            );
           });
           _speak(word);
           return;
@@ -198,6 +262,11 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
             _speechResultHandled = true;
             _isListening = false;
             _lastAnswerCorrect = false;
+            _recordFirstSpeakingAttempt(
+              word: word,
+              userAnswer: recognized,
+              correct: false,
+            );
           }
         });
 
@@ -214,12 +283,13 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
     }
 
     final choices = <String>{current.translationGr};
-    final pool = words
-        .where((word) => word.id != current.id)
-        .map((word) => word.translationGr)
-        .where((translation) => translation.isNotEmpty)
-        .toList()
-      ..shuffle(_random);
+    final pool =
+        words
+            .where((word) => word.id != current.id)
+            .map((word) => word.translationGr)
+            .where((translation) => translation.isNotEmpty)
+            .toList()
+          ..shuffle(_random);
 
     for (final translation in pool) {
       if (choices.length >= 4) {
@@ -234,9 +304,7 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
 
   void _checkWrittenAnswer(_VocWord word, {required bool toGreek}) {
     final answer = _answerController.text;
-    final correctAnswers = toGreek
-        ? word.acceptedAnswers
-        : <String>[word.word];
+    final correctAnswers = toGreek ? word.acceptedAnswers : <String>[word.word];
     final correctAnswer = toGreek ? word.translationGr : word.word;
     final prompt = toGreek ? word.word : word.translationGr;
     final mode = toGreek ? _VocMode.writeGreek : _VocMode.writeForeign;
@@ -283,8 +351,34 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
     );
   }
 
+  void _recordFirstSpeakingAttempt({
+    required _VocWord word,
+    required String userAnswer,
+    required bool correct,
+  }) {
+    final alreadyRecorded = _attempts.any(
+      (attempt) =>
+          attempt.mode == _VocMode.speaking && attempt.wordId == word.id,
+    );
+    if (alreadyRecorded) {
+      return;
+    }
+
+    _attempts.add(
+      _VocAttempt(
+        mode: _VocMode.speaking,
+        wordId: word.id,
+        prompt: word.word,
+        userAnswer: userAnswer,
+        correctAnswer: word.word,
+        correct: correct,
+      ),
+    );
+  }
+
   void _nextOrFinish(List<_VocWord> words) {
-    if (_mode == _VocMode.multipleChoice ||
+    if (_mode == _VocMode.speaking ||
+        _mode == _VocMode.multipleChoice ||
         _mode == _VocMode.writeGreek ||
         _mode == _VocMode.writeForeign) {
       if (_wordIndex >= words.length - 1) {
@@ -297,11 +391,17 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
   }
 
   void _showScoreDialog(_VocMode mode) {
-    final attempts = _attempts.where((attempt) => attempt.mode == mode).toList();
+    final attempts = _attempts
+        .where((attempt) => attempt.mode == mode)
+        .toList();
     final total = attempts.length;
     final correct = attempts.where((attempt) => attempt.correct).length;
     final wrong = attempts.where((attempt) => !attempt.correct).toList();
     final percent = total == 0 ? 0 : ((correct / total) * 100).round();
+    if (widget.assignmentSession != null && !_assignmentResultSaved) {
+      _assignmentResultSaved = true;
+      _assignmentSaveFuture = _saveAssignmentResult(percent);
+    }
 
     showDialog<void>(
       context: context,
@@ -360,17 +460,53 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
             ),
             actions: [
               FilledButton(
-                onPressed: () {
+                onPressed: () async {
+                  await _assignmentSaveFuture;
+                  if (!dialogContext.mounted || !mounted) return;
                   Navigator.of(dialogContext).pop();
-                  _selectMode(null);
+                  if (widget.assignmentSession != null) {
+                    Navigator.of(context).pop();
+                  } else {
+                    _selectMode(null);
+                  }
                 },
-                child: const Text('Μενού'),
+                child: Text(
+                  widget.assignmentSession == null
+                      ? 'Μενού'
+                      : 'Επιστροφή στις ασκήσεις',
+                ),
               ),
             ],
           ),
         );
       },
     );
+  }
+
+  Future<void> _saveAssignmentResult(int percent) async {
+    final session = widget.assignmentSession;
+    if (session == null) return;
+    try {
+      final passed = await session.saveProgress(
+        progress: percent,
+        scorePercentage: percent.toDouble(),
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            passed
+                ? 'Η άσκηση ολοκληρώθηκε με $percent%!'
+                : 'Χρειάζεσαι τουλάχιστον 71%. Μπορείς να προσπαθήσεις ξανά.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Δεν αποθηκεύτηκε η προσπάθεια: $error')),
+      );
+    }
   }
 
   @override
@@ -405,7 +541,6 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
               );
             }
 
-            _selectedUnit ??= units.first.value;
             final words = allWords
                 .where(
                   (word) =>
@@ -414,33 +549,28 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
                 )
                 .toList();
 
-            if (words.isEmpty) {
+            if (_mode == null || words.isEmpty) {
               return ListView(
-                padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+                padding: EdgeInsets.zero,
                 children: [
-                  _Header(onBack: () => Navigator.of(context).pop()),
-                  const SizedBox(height: 16),
-                  _UnitPicker(
+                  _StudyVocHome(
                     units: units,
                     selectedUnit: _selectedUnit,
-                    onChanged: _selectUnit,
-                  ),
-                  const SizedBox(height: 14),
-                  _ImportantWordsToggle(
-                    value: _importantOnly,
-                    onChanged: (value) {
+                    importantOnly: _importantOnly,
+                    unitValidationError: _unitValidationError,
+                    onBack: () => Navigator.of(context).pop(),
+                    onUnitChanged: _selectUnit,
+                    onImportantChanged: (value) {
                       setState(() {
-                        _importantOnly = value ?? false;
+                        _importantOnly = value;
                         _wordIndex = 0;
                         _attempts.clear();
                         _resetQuestionState();
                       });
                     },
+                    onModeSelected: _selectMode,
+                    showEmptyMessage: _selectedUnit != null && words.isEmpty,
                   ),
-                  const SizedBox(height: 18),
-                  _ModeMenu(onSelected: _selectMode),
-                  const SizedBox(height: 18),
-                  const _EmptyUnitMessage(),
                 ],
               );
             }
@@ -455,92 +585,80 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
             return ListView(
               padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
               children: [
-                _Header(onBack: () => Navigator.of(context).pop()),
-                const SizedBox(height: 16),
-                _UnitPicker(
-                  units: units,
-                  selectedUnit: _selectedUnit,
-                  onChanged: _selectUnit,
+                _ModeHeader(mode: _mode!, onBack: () => _selectMode(null)),
+                const SizedBox(height: 14),
+                _ModeBody(
+                  mode: _mode!,
+                  word: current,
+                  studyWords: words,
+                  studyController: _studySwiperController,
+                  currentIndex: currentIndex,
+                  wordCount: words.length,
+                  isFlipped: _isFlipped,
+                  choices: _multipleChoices,
+                  selectedChoice: _selectedChoice,
+                  lastAnswerCorrect: _lastAnswerCorrect,
+                  spokenText: _spokenText,
+                  isListening: _isListening,
+                  answerController: _answerController,
+                  onSpeak: () => _speak(current),
+                  onStudySpeak: _speak,
+                  onStudyIndexChanged: (index) {
+                    _studyIndexTimer?.cancel();
+                    _studyIndexTimer = Timer(
+                      const Duration(milliseconds: 340),
+                      () {
+                        if (!mounted || _mode != _VocMode.study) {
+                          return;
+                        }
+                        setState(() {
+                          _wordIndex = index;
+                          _resetQuestionState();
+                        });
+                      },
+                    );
+                  },
+                  onFlip: () => setState(() => _isFlipped = !_isFlipped),
+                  onListen: () => _toggleListening(current),
+                  onChoiceSelected: (choice) {
+                    final isCorrect = choice == current.translationGr;
+                    setState(() {
+                      _selectedChoice = choice;
+                      _lastAnswerCorrect = isCorrect;
+                      _recordAttempt(
+                        mode: _VocMode.multipleChoice,
+                        word: current,
+                        prompt: current.word,
+                        userAnswer: choice,
+                        correctAnswer: current.translationGr,
+                        correct: isCorrect,
+                      );
+                    });
+                    if (isCorrect) {
+                      _speak(current);
+                    }
+                  },
+                  onCheckGreek: () =>
+                      _checkWrittenAnswer(current, toGreek: true),
+                  onCheckForeign: () =>
+                      _checkWrittenAnswer(current, toGreek: false),
+                  onNext: () => _nextOrFinish(words),
                 ),
                 const SizedBox(height: 14),
-                if (_mode == null) ...[
-                  _ImportantWordsToggle(
-                    value: _importantOnly,
-                    onChanged: (value) {
-                      setState(() {
-                        _importantOnly = value ?? false;
-                        _wordIndex = 0;
-                        _attempts.clear();
-                        _resetQuestionState();
-                      });
-                    },
+                Text(
+                  '${currentIndex + 1}/${words.length}',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Color(0xFF173A8A),
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
                   ),
-                  const SizedBox(height: 14),
-                  const SizedBox(height: 18),
-                  Image.asset(
-                    'lib/img/openBook.png',
-                    height: 190,
-                    fit: BoxFit.contain,
-                  ),
-                  const SizedBox(height: 18),
-                  _ModeMenu(onSelected: _selectMode),
-                ] else ...[
-                  _ModeHeader(
-                    mode: _mode!,
-                    onBack: () => _selectMode(null),
-                  ),
-                  const SizedBox(height: 14),
-                  _ModeBody(
-                    mode: _mode!,
-                    word: current,
-                    currentIndex: currentIndex,
-                    wordCount: words.length,
-                    isFlipped: _isFlipped,
-                    choices: _multipleChoices,
-                    selectedChoice: _selectedChoice,
-                    lastAnswerCorrect: _lastAnswerCorrect,
-                    spokenText: _spokenText,
-                    isListening: _isListening,
-                    answerController: _answerController,
-                    onSpeak: () => _speak(current),
-                    onFlip: () => setState(() => _isFlipped = !_isFlipped),
-                    onSwipe: (direction) => _moveWord(direction, words),
-                    onListen: () => _toggleListening(current),
-                    onChoiceSelected: (choice) {
-                      final isCorrect = choice == current.translationGr;
-                      setState(() {
-                        _selectedChoice = choice;
-                        _lastAnswerCorrect = isCorrect;
-                        _recordAttempt(
-                          mode: _VocMode.multipleChoice,
-                          word: current,
-                          prompt: current.word,
-                          userAnswer: choice,
-                          correctAnswer: current.translationGr,
-                          correct: isCorrect,
-                        );
-                      });
-                      if (isCorrect) {
-                        _speak(current);
-                      }
-                    },
-                    onCheckGreek: () =>
-                        _checkWrittenAnswer(current, toGreek: true),
-                    onCheckForeign: () =>
-                        _checkWrittenAnswer(current, toGreek: false),
-                    onNext: () => _nextOrFinish(words),
-                  ),
-                  const SizedBox(height: 14),
-                  Text(
-                    '${currentIndex + 1}/${words.length}',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Color(0xFF173A8A),
-                      fontSize: 14,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ],
+                ),
+                const SizedBox(height: 12),
+                _ExerciseMascot(
+                  mode: _mode!,
+                  isCorrect: _lastAnswerCorrect == true,
+                ),
               ],
             );
           },
@@ -550,108 +668,402 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
   }
 }
 
-class _Header extends StatelessWidget {
-  const _Header({required this.onBack});
-
-  final VoidCallback onBack;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        InkWell(
-          onTap: onBack,
-          borderRadius: BorderRadius.circular(18),
-          child: const SizedBox(
-            width: 42,
-            height: 42,
-            child: Icon(
-              Icons.arrow_back_ios_new_rounded,
-              color: Color(0xFF8E8E93),
-              size: 22,
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        const Expanded(
-          child: Text(
-            'Study your voc',
-            style: TextStyle(
-              color: Color(0xFF4D4AAD),
-              fontSize: 28,
-              fontWeight: FontWeight.w900,
-              height: 1.05,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _UnitPicker extends StatelessWidget {
-  const _UnitPicker({
+class _StudyVocHome extends StatelessWidget {
+  const _StudyVocHome({
     required this.units,
     required this.selectedUnit,
-    required this.onChanged,
+    required this.importantOnly,
+    required this.unitValidationError,
+    required this.onBack,
+    required this.onUnitChanged,
+    required this.onImportantChanged,
+    required this.onModeSelected,
+    required this.showEmptyMessage,
   });
 
   final List<_VocUnit> units;
   final String? selectedUnit;
-  final ValueChanged<String?> onChanged;
+  final bool importantOnly;
+  final bool unitValidationError;
+  final VoidCallback onBack;
+  final ValueChanged<String?> onUnitChanged;
+  final ValueChanged<bool> onImportantChanged;
+  final ValueChanged<_VocMode> onModeSelected;
+  final bool showEmptyMessage;
 
   @override
   Widget build(BuildContext context) {
-    return DropdownButtonFormField<String>(
-      initialValue: selectedUnit,
-      isExpanded: true,
-      decoration: InputDecoration(
-        labelText: 'Ενότητα',
-        filled: true,
-        fillColor: const Color(0xFFEAF7FF),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18),
-          borderSide: BorderSide.none,
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final compact = screenWidth < 390;
+
+    return Container(
+      constraints: BoxConstraints(
+        minHeight:
+            MediaQuery.sizeOf(context).height -
+            MediaQuery.paddingOf(context).vertical,
+      ),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFFFFFCFA), Color(0xFFF8F8FF), Color(0xFFEEF3FF)],
+          stops: [0, 0.52, 1],
         ),
       ),
-      items: [
-        for (final unit in units)
-          DropdownMenuItem(value: unit.value, child: Text(unit.label)),
-      ],
-      onChanged: onChanged,
+      child: Stack(
+        children: [
+          const Positioned(
+            top: -80,
+            right: -70,
+            child: _SoftGlow(color: Color(0x337E6BFF), size: 230),
+          ),
+          const Positioned(
+            top: 80,
+            left: -90,
+            child: _SoftGlow(color: Color(0x22FF9B63), size: 210),
+          ),
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+              compact ? 14 : 20,
+              compact ? 12 : 18,
+              compact ? 14 : 20,
+              34,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _StudyVocHero(onBack: onBack, compact: compact),
+                SizedBox(height: compact ? 14 : 20),
+                _StudyVocSettings(
+                  units: units,
+                  selectedUnit: selectedUnit,
+                  importantOnly: importantOnly,
+                  unitValidationError: unitValidationError,
+                  onUnitChanged: onUnitChanged,
+                  onImportantChanged: onImportantChanged,
+                  compact: compact,
+                ),
+                const SizedBox(height: 16),
+                _ModeMenu(onSelected: onModeSelected),
+                if (showEmptyMessage) ...[
+                  const SizedBox(height: 6),
+                  const _EmptyUnitMessage(),
+                ],
+                const SizedBox(height: 22),
+                const _StudyVocFooterDecoration(),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
 
-class _ImportantWordsToggle extends StatelessWidget {
-  const _ImportantWordsToggle({
-    required this.value,
-    required this.onChanged,
-  });
+class _StudyVocHero extends StatelessWidget {
+  const _StudyVocHero({required this.onBack, required this.compact});
 
-  final bool value;
-  final ValueChanged<bool?> onChanged;
+  final VoidCallback onBack;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: const Color(0xFFEAF7FF),
-      borderRadius: BorderRadius.circular(16),
-      child: CheckboxListTile(
-        value: value,
-        onChanged: onChanged,
-        dense: true,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12),
-        activeColor: const Color(0xFF4D4AAD),
-        checkColor: Colors.white,
-        title: const Text(
-          'Σημαντικές λέξεις',
-          style: TextStyle(
-            color: Color(0xFF173A8A),
-            fontSize: 16,
-            fontWeight: FontWeight.w900,
+    return Column(
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Material(
+              color: Colors.white.withValues(alpha: 0.92),
+              shape: const CircleBorder(),
+              elevation: 6,
+              shadowColor: const Color(0x26D52323),
+              child: InkWell(
+                onTap: onBack,
+                customBorder: const CircleBorder(),
+                child: SizedBox(
+                  width: compact ? 50 : 58,
+                  height: compact ? 50 : 58,
+                  child: Icon(
+                    Icons.close_rounded,
+                    color: const Color(0xFFE32636),
+                    size: compact ? 37 : 43,
+                    weight: 900,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Study your voc',
+                maxLines: 2,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: const Color(0xFF28116B),
+                  fontSize: compact ? 31 : 38,
+                  fontWeight: FontWeight.w900,
+                  height: 0.98,
+                  letterSpacing: -1.2,
+                  shadows: const [
+                    Shadow(
+                      color: Color(0x20754EF2),
+                      blurRadius: 14,
+                      offset: Offset(0, 4),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 4),
+            SizedBox(
+              width: compact ? 88 : 112,
+              height: compact ? 92 : 116,
+              child: Image.asset(
+                'lib/img/studyyourvoc.png',
+                fit: BoxFit.contain,
+              ),
+            ),
+          ],
+        ),
+        Transform.translate(
+          offset: const Offset(0, -4),
+          child: Text(
+            'Μελέτησε, εξάσκησε και\nβελτίωσε το λεξιλόγιό σου!',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: const Color(0xFF77718F),
+              fontSize: compact ? 17 : 20,
+              fontWeight: FontWeight.w700,
+              height: 1.35,
+            ),
           ),
         ),
+      ],
+    );
+  }
+}
+
+class _StudyVocSettings extends StatelessWidget {
+  const _StudyVocSettings({
+    required this.units,
+    required this.selectedUnit,
+    required this.importantOnly,
+    required this.unitValidationError,
+    required this.onUnitChanged,
+    required this.onImportantChanged,
+    required this.compact,
+  });
+
+  final List<_VocUnit> units;
+  final String? selectedUnit;
+  final bool importantOnly;
+  final bool unitValidationError;
+  final ValueChanged<String?> onUnitChanged;
+  final ValueChanged<bool> onImportantChanged;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: compact ? 14 : 18),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.88),
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: const Color(0x1F7964EE)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x126051B4),
+            blurRadius: 28,
+            offset: Offset(0, 12),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            height: compact ? 82 : 92,
+            margin: const EdgeInsets.symmetric(vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            decoration: BoxDecoration(
+              color: unitValidationError
+                  ? const Color(0xFFFFF2F2)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: unitValidationError
+                    ? const Color(0xFFE32636)
+                    : Colors.transparent,
+                width: 2,
+              ),
+            ),
+            child: Row(
+              children: [
+                const _SettingsIcon(
+                  icon: Icons.menu_book_rounded,
+                  foreground: Color(0xFF7448EC),
+                  background: Color(0xFFF2EDFF),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Ενότητα',
+                        style: TextStyle(
+                          color: unitValidationError
+                              ? const Color(0xFFE32636)
+                              : const Color(0xFF2A1B50),
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: selectedUnit,
+                          isDense: true,
+                          isExpanded: true,
+                          icon: _RoundTrailingIcon(
+                            icon: Icons.keyboard_arrow_down_rounded,
+                            color: unitValidationError
+                                ? const Color(0xFFE32636)
+                                : const Color(0xFF6940EB),
+                          ),
+                          hint: Text(
+                            'Επέλεξε ενότητα να μελετήσεις',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: unitValidationError
+                                  ? const Color(0xFFE32636)
+                                  : const Color(0xFF77718F),
+                              fontSize: compact ? 14 : 15,
+                              fontWeight: FontWeight.w800,
+                              height: 1.15,
+                            ),
+                          ),
+                          borderRadius: BorderRadius.circular(18),
+                          style: const TextStyle(
+                            color: Color(0xFF22134F),
+                            fontSize: 22,
+                            fontWeight: FontWeight.w900,
+                          ),
+                          items: [
+                            for (final unit in units)
+                              DropdownMenuItem(
+                                value: unit.value,
+                                child: Text(
+                                  unit.label,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                          ],
+                          onChanged: onUnitChanged,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1, color: Color(0x1F7964EE)),
+          SizedBox(
+            height: compact ? 76 : 84,
+            child: Row(
+              children: [
+                const _SettingsIcon(
+                  icon: Icons.star_rounded,
+                  foreground: Color(0xFFFFBD18),
+                  background: Color(0xFFFFF5E7),
+                ),
+                const SizedBox(width: 14),
+                const Expanded(
+                  child: Text(
+                    'Σημαντικές λέξεις μόνο',
+                    style: TextStyle(
+                      color: Color(0xFF25174E),
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                Switch.adaptive(
+                  value: importantOnly,
+                  activeTrackColor: const Color(0xFF7547EF),
+                  activeThumbColor: Colors.white,
+                  onChanged: onImportantChanged,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SettingsIcon extends StatelessWidget {
+  const _SettingsIcon({
+    required this.icon,
+    required this.foreground,
+    required this.background,
+  });
+
+  final IconData icon;
+  final Color foreground;
+  final Color background;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 54,
+      height: 54,
+      decoration: BoxDecoration(color: background, shape: BoxShape.circle),
+      child: Icon(icon, color: foreground, size: 31),
+    );
+  }
+}
+
+class _RoundTrailingIcon extends StatelessWidget {
+  const _RoundTrailingIcon({required this.icon, required this.color});
+
+  final IconData icon;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 46,
+      height: 46,
+      decoration: const BoxDecoration(
+        color: Color(0xFFF7F5FF),
+        shape: BoxShape.circle,
+      ),
+      child: Icon(icon, color: color, size: 31),
+    );
+  }
+}
+
+class _SoftGlow extends StatelessWidget {
+  const _SoftGlow({required this.color, required this.size});
+
+  final Color color;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: RadialGradient(colors: [color, color.withValues(alpha: 0)]),
       ),
     );
   }
@@ -689,25 +1101,45 @@ class _ModeMenu extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const modes = [
-      (_VocMode.study, 'Μελέτη', Icons.style_rounded, Color(0xFF4D4AAD)),
+      (
+        _VocMode.study,
+        'Μελέτη',
+        'Διάβασε και μάθε\nτο λεξιλόγιο',
+        Icons.menu_book_rounded,
+        Color(0xFF6840E8),
+        Color(0xFFF5F0FF),
+      ),
       (
         _VocMode.speaking,
         'Προφορικά',
+        'Πες τις λέξεις δυνατά\nκαι εξάσκησε την προφορά σου',
         Icons.record_voice_over_rounded,
-        Color(0xFF2D7D10),
+        Color(0xFF239A39),
+        Color(0xFFF0FFF2),
       ),
-      (_VocMode.multipleChoice, 'Quiz', Icons.quiz_rounded, Color(0xFFDB9538)),
+      (
+        _VocMode.multipleChoice,
+        'Quiz',
+        'Απάντησε σε ερωτήσεις\nπολλαπλής επιλογής',
+        Icons.quiz_rounded,
+        Color(0xFFFF7A08),
+        Color(0xFFFFF8ED),
+      ),
       (
         _VocMode.writeForeign,
-        'Ελληνικά - Ξένη Γλώσσα',
+        'Ελληνικά – Ξένη Γλώσσα',
+        'Μετάφρασε από τα ελληνικά\nστη ξένη γλώσσα',
         Icons.translate_rounded,
-        Color(0xFF385DC9),
+        Color(0xFF2468E8),
+        Color(0xFFF0F6FF),
       ),
       (
         _VocMode.writeGreek,
-        'Ξένη Γλώσσα - Ελληνικά',
+        'Ξένη Γλώσσα – Ελληνικά',
+        'Μετάφρασε από τη ξένη γλώσσα\nστα ελληνικά',
         Icons.edit_rounded,
-        Color(0xFF7D1010),
+        Color(0xFFFF4F59),
+        Color(0xFFFFF2F4),
       ),
     ];
 
@@ -717,11 +1149,13 @@ class _ModeMenu extends StatelessWidget {
         for (final mode in modes) ...[
           _ModeMenuCard(
             label: mode.$2,
-            icon: mode.$3,
-            color: mode.$4,
+            description: mode.$3,
+            icon: mode.$4,
+            color: mode.$5,
+            background: mode.$6,
             onTap: () => onSelected(mode.$1),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
         ],
       ],
     );
@@ -731,44 +1165,170 @@ class _ModeMenu extends StatelessWidget {
 class _ModeMenuCard extends StatelessWidget {
   const _ModeMenuCard({
     required this.label,
+    required this.description,
     required this.icon,
     required this.color,
+    required this.background,
     required this.onTap,
   });
 
   final String label;
+  final String description;
   final IconData icon;
   final Color color;
+  final Color background;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: color.withValues(alpha: 0.12),
-      borderRadius: BorderRadius.circular(20),
+      color: background,
+      borderRadius: BorderRadius.circular(26),
+      elevation: 3,
+      shadowColor: const Color(0x126051B4),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(26),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+          padding: const EdgeInsets.fromLTRB(12, 12, 14, 12),
           child: Row(
             children: [
-              Icon(icon, color: color, size: 34),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Text(
-                  label,
-                  style: TextStyle(
-                    color: color,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w900,
+              Container(
+                width: 78,
+                height: 78,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [color.withValues(alpha: 0.68), color],
                   ),
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [
+                    BoxShadow(
+                      color: color.withValues(alpha: 0.22),
+                      blurRadius: 16,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                child: Icon(icon, color: Colors.white, size: 42),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      style: TextStyle(
+                        color: color,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w900,
+                        height: 1.1,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      description,
+                      style: const TextStyle(
+                        color: Color(0xFF514B63),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        height: 1.3,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              Icon(Icons.chevron_right_rounded, color: color, size: 30),
+              const SizedBox(width: 8),
+              Container(
+                width: 43,
+                height: 43,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.82),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white),
+                ),
+                child: Icon(
+                  Icons.chevron_right_rounded,
+                  color: color,
+                  size: 31,
+                ),
+              ),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _StudyVocFooterDecoration extends StatelessWidget {
+  const _StudyVocFooterDecoration();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 72,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned(
+            left: 20,
+            bottom: 2,
+            child: Transform.rotate(
+              angle: -0.12,
+              child: Container(
+                width: 108,
+                height: 38,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFFA14EED), Color(0xFFE89CFF)],
+                  ),
+                  borderRadius: BorderRadius.circular(10),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x307D48D8),
+                      blurRadius: 16,
+                      offset: Offset(0, 8),
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  Icons.menu_book_rounded,
+                  color: Colors.white70,
+                  size: 27,
+                ),
+              ),
+            ),
+          ),
+          const Positioned(
+            right: 122,
+            bottom: 28,
+            child: Icon(Icons.circle, color: Color(0xFF21CBE4), size: 13),
+          ),
+          const Positioned(
+            right: 52,
+            bottom: 1,
+            child: Icon(
+              Icons.star_rounded,
+              color: Color(0xFFFFC81F),
+              size: 52,
+              shadows: [
+                Shadow(
+                  color: Color(0x45D69A00),
+                  blurRadius: 7,
+                  offset: Offset(0, 4),
+                ),
+              ],
+            ),
+          ),
+          const Positioned(
+            right: 3,
+            bottom: 42,
+            child: Icon(Icons.auto_awesome, color: Color(0xFF5B9CFF), size: 28),
+          ),
+        ],
       ),
     );
   }
@@ -784,18 +1344,28 @@ class _ModeHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        IconButton(
-          onPressed: onBack,
-          icon: const Icon(Icons.arrow_back_rounded),
-          color: const Color(0xFF4D4AAD),
+        InkWell(
+          onTap: onBack,
+          borderRadius: BorderRadius.circular(18),
+          child: const SizedBox(
+            width: 42,
+            height: 42,
+            child: Icon(
+              Icons.arrow_back_ios_new_rounded,
+              color: Color(0xFF8E8E93),
+              size: 22,
+            ),
+          ),
         ),
+        const SizedBox(width: 8),
         Expanded(
           child: Text(
             _modeLabel(mode),
             style: const TextStyle(
               color: Color(0xFF4D4AAD),
-              fontSize: 20,
+              fontSize: 24,
               fontWeight: FontWeight.w900,
+              height: 1.05,
             ),
           ),
         ),
@@ -804,10 +1374,64 @@ class _ModeHeader extends StatelessWidget {
   }
 }
 
+class _ExerciseMascot extends StatelessWidget {
+  const _ExerciseMascot({required this.mode, required this.isCorrect});
+
+  final _VocMode mode;
+  final bool isCorrect;
+
+  String get _assetPath {
+    if (mode == _VocMode.study) {
+      return 'lib/img/studying.png';
+    }
+
+    if (isCorrect) {
+      return 'lib/img/happyboy.png';
+    }
+
+    if (mode == _VocMode.speaking) {
+      return 'lib/img/talking.png';
+    }
+
+    return 'lib/img/puzzled.png';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final assetPath = _assetPath;
+    final imageHeight = min(MediaQuery.sizeOf(context).width * 0.72, 280.0);
+
+    return Center(
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 320),
+        switchInCurve: Curves.easeOutBack,
+        switchOutCurve: Curves.easeIn,
+        transitionBuilder: (child, animation) {
+          return FadeTransition(
+            opacity: animation,
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.9, end: 1).animate(animation),
+              child: child,
+            ),
+          );
+        },
+        child: Image.asset(
+          assetPath,
+          key: ValueKey(assetPath),
+          height: imageHeight,
+          fit: BoxFit.contain,
+        ),
+      ),
+    );
+  }
+}
+
 class _ModeBody extends StatelessWidget {
   const _ModeBody({
     required this.mode,
     required this.word,
+    required this.studyWords,
+    required this.studyController,
     required this.currentIndex,
     required this.wordCount,
     required this.isFlipped,
@@ -818,8 +1442,9 @@ class _ModeBody extends StatelessWidget {
     required this.isListening,
     required this.answerController,
     required this.onSpeak,
+    required this.onStudySpeak,
+    required this.onStudyIndexChanged,
     required this.onFlip,
-    required this.onSwipe,
     required this.onListen,
     required this.onChoiceSelected,
     required this.onCheckGreek,
@@ -829,6 +1454,8 @@ class _ModeBody extends StatelessWidget {
 
   final _VocMode mode;
   final _VocWord word;
+  final List<_VocWord> studyWords;
+  final CardSwiperController studyController;
   final int currentIndex;
   final int wordCount;
   final bool isFlipped;
@@ -839,8 +1466,9 @@ class _ModeBody extends StatelessWidget {
   final bool isListening;
   final TextEditingController answerController;
   final VoidCallback onSpeak;
+  final ValueChanged<_VocWord> onStudySpeak;
+  final ValueChanged<int> onStudyIndexChanged;
   final VoidCallback onFlip;
-  final ValueChanged<int> onSwipe;
   final VoidCallback onListen;
   final ValueChanged<String> onChoiceSelected;
   final VoidCallback onCheckGreek;
@@ -851,14 +1479,14 @@ class _ModeBody extends StatelessWidget {
   Widget build(BuildContext context) {
     switch (mode) {
       case _VocMode.study:
-        return _StudyCard(
-          word: word,
-          canGoBack: currentIndex > 0,
-          canGoForward: currentIndex < wordCount - 1,
+        return _StudyCardStack(
+          words: studyWords,
+          controller: studyController,
+          currentIndex: currentIndex,
           isFlipped: isFlipped,
-          onSpeak: onSpeak,
+          onSpeak: onStudySpeak,
           onFlip: onFlip,
-          onSwipe: onSwipe,
+          onIndexChanged: onStudyIndexChanged,
         );
       case _VocMode.speaking:
         return _SpeakingCard(
@@ -886,6 +1514,7 @@ class _ModeBody extends StatelessWidget {
           controller: answerController,
           lastAnswerCorrect: lastAnswerCorrect,
           correctAnswer: word.translationGr,
+          lockCheckAfterAnswer: false,
           onSpeak: onSpeak,
           onCheck: onCheckGreek,
           onNext: onNext,
@@ -897,6 +1526,7 @@ class _ModeBody extends StatelessWidget {
           controller: answerController,
           lastAnswerCorrect: lastAnswerCorrect,
           correctAnswer: word.word,
+          lockCheckAfterAnswer: true,
           onSpeak: null,
           onCheck: onCheckForeign,
           onNext: onNext,
@@ -905,87 +1535,143 @@ class _ModeBody extends StatelessWidget {
   }
 }
 
-class _StudyCard extends StatelessWidget {
-  const _StudyCard({
-    required this.word,
-    required this.canGoBack,
-    required this.canGoForward,
+class _StudyCardStack extends StatelessWidget {
+  const _StudyCardStack({
+    required this.words,
+    required this.controller,
+    required this.currentIndex,
     required this.isFlipped,
     required this.onSpeak,
     required this.onFlip,
-    required this.onSwipe,
+    required this.onIndexChanged,
   });
 
-  final _VocWord word;
-  final bool canGoBack;
-  final bool canGoForward;
+  final List<_VocWord> words;
+  final CardSwiperController controller;
+  final int currentIndex;
   final bool isFlipped;
-  final VoidCallback onSpeak;
+  final ValueChanged<_VocWord> onSpeak;
   final VoidCallback onFlip;
-  final ValueChanged<int> onSwipe;
+  final ValueChanged<int> onIndexChanged;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        SizedBox(
-          width: 42,
-          child: canGoBack
-              ? IconButton(
-                  onPressed: () => onSwipe(-1),
-                  icon: const Icon(Icons.chevron_left_rounded),
-                  color: const Color(0xFF4D4AAD),
-                  iconSize: 38,
-                )
-              : const SizedBox.shrink(),
+    final visibleCards = min(words.length, 3);
+
+    return SizedBox(
+      height: 390,
+      child: CardSwiper(
+        key: ValueKey('${words.first.id}-${words.length}'),
+        controller: controller,
+        cardsCount: words.length,
+        initialIndex: currentIndex,
+        numberOfCardsDisplayed: visibleCards,
+        isLoop: true,
+        duration: const Duration(milliseconds: 320),
+        threshold: 35,
+        maxAngle: 18,
+        scale: 0.92,
+        backCardOffset: const Offset(0, 24),
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 38),
+        onSwipe: (previousIndex, nextIndex, direction) {
+          if (nextIndex != null) {
+            onIndexChanged(nextIndex);
+          }
+          return true;
+        },
+        cardBuilder: (context, index, percentX, percentY) {
+          final word = words[index];
+          return _StudyFlashCard(
+            word: word,
+            isFlipped: index == currentIndex && isFlipped,
+            onSpeak: () => onSpeak(word),
+            onFlip: onFlip,
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _StudyFlashCard extends StatelessWidget {
+  const _StudyFlashCard({
+    required this.word,
+    required this.isFlipped,
+    required this.onSpeak,
+    required this.onFlip,
+  });
+
+  final _VocWord word;
+  final bool isFlipped;
+  final VoidCallback onSpeak;
+  final VoidCallback onFlip;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onFlip,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 240),
+        curve: Curves.easeOutCubic,
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: isFlipped
+                ? const [Color(0xFFFFFAE9), Color(0xFFFFEFC2)]
+                : const [Color(0xFFFDFEFF), Color(0xFFEAF5FF)],
+          ),
+          borderRadius: BorderRadius.circular(28),
+          border: Border.all(color: Colors.white, width: 1.6),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x246051B4),
+              blurRadius: 24,
+              offset: Offset(0, 14),
+            ),
+          ],
         ),
-        Expanded(
-          child: GestureDetector(
-            onTap: onFlip,
-            onPanEnd: (details) {
-              final velocity = details.velocity.pixelsPerSecond;
-              final direction = velocity.dx.abs() > velocity.dy.abs()
-                  ? (velocity.dx < 0 ? 1 : -1)
-                  : (velocity.dy < 0 ? 1 : -1);
-              if (direction < 0 && !canGoBack) {
-                return;
-              }
-              if (direction > 0 && !canGoForward) {
-                return;
-              }
-              onSwipe(direction);
-            },
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 260),
-              transitionBuilder: (child, animation) {
-                return ScaleTransition(scale: animation, child: child);
-              },
+        child: Stack(
+          children: [
+            Positioned(
+              top: -48,
+              right: -32,
               child: Container(
-                key: ValueKey('${word.id}-$isFlipped'),
-                height: 330,
-                padding: const EdgeInsets.all(24),
+                width: 140,
+                height: 140,
                 decoration: BoxDecoration(
-                  color: isFlipped
-                      ? const Color(0xFFFFF5D8)
-                      : const Color(0xFFEAF7FF),
-                  borderRadius: BorderRadius.circular(26),
-                  border: Border.all(color: const Color(0x334D4AAD)),
+                  shape: BoxShape.circle,
+                  color:
+                      (isFlipped
+                              ? const Color(0xFFFFBD18)
+                              : const Color(0xFF5D65EA))
+                          .withValues(alpha: 0.12),
                 ),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    if (!isFlipped)
-                      IconButton.filled(
-                        onPressed: onSpeak,
-                        icon: const Icon(Icons.volume_up_rounded),
-                        style: IconButton.styleFrom(
-                          backgroundColor: const Color(0xFF4D4AAD),
-                          foregroundColor: Colors.white,
-                        ),
+              ),
+            ),
+            Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (!isFlipped)
+                    IconButton.filled(
+                      onPressed: onSpeak,
+                      icon: const Icon(Icons.volume_up_rounded),
+                      style: IconButton.styleFrom(
+                        backgroundColor: const Color(0xFF5D4BE2),
+                        foregroundColor: Colors.white,
+                        fixedSize: const Size(54, 54),
                       ),
-                    const SizedBox(height: 18),
-                    Text(
+                    ),
+                  SizedBox(height: isFlipped ? 0 : 20),
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 220),
+                    transitionBuilder: (child, animation) =>
+                        FadeTransition(opacity: animation, child: child),
+                    child: Text(
                       isFlipped ? word.translationGr : word.word,
+                      key: ValueKey('${word.id}-$isFlipped'),
                       textAlign: TextAlign.center,
                       style: const TextStyle(
                         color: Color(0xFF173A8A),
@@ -994,35 +1680,34 @@ class _StudyCard extends StatelessWidget {
                         height: 1.08,
                       ),
                     ),
-                    if (word.partOfSpeech != null) ...[
-                      const SizedBox(height: 10),
-                      Text(
-                        word.partOfSpeech!,
-                        style: TextStyle(
-                          color: Colors.grey.shade700,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                        ),
+                  ),
+                  if (word.partOfSpeech != null) ...[
+                    const SizedBox(height: 10),
+                    Text(
+                      word.partOfSpeech!,
+                      style: const TextStyle(
+                        color: Color(0xFF6B6B78),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
                       ),
-                    ],
+                    ),
                   ],
-                ),
+                  const SizedBox(height: 22),
+                  const Text(
+                    'Πάτησε για μετάφραση • Σύρε για επόμενη',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Color(0xFF77718F),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
               ),
             ),
-          ),
+          ],
         ),
-        SizedBox(
-          width: 42,
-          child: canGoForward
-              ? IconButton(
-                  onPressed: () => onSwipe(1),
-                  icon: const Icon(Icons.chevron_right_rounded),
-                  color: const Color(0xFF4D4AAD),
-                  iconSize: 38,
-                )
-              : const SizedBox.shrink(),
-        ),
-      ],
+      ),
     );
   }
 }
@@ -1049,6 +1734,12 @@ class _SpeakingCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _PracticePanel(
+      backgroundColor: lastAnswerCorrect == false
+          ? const Color(0xFFFFE2E2)
+          : const Color(0xFFEAF7FF),
+      borderColor: lastAnswerCorrect == false
+          ? const Color(0xFFE32636)
+          : Colors.transparent,
       children: [
         Text(
           word.word,
@@ -1075,9 +1766,7 @@ class _SpeakingCard extends StatelessWidget {
             const SizedBox(width: 16),
             IconButton.filled(
               onPressed: onListen,
-              icon: Icon(
-                isListening ? Icons.stop_rounded : Icons.mic_rounded,
-              ),
+              icon: Icon(isListening ? Icons.stop_rounded : Icons.mic_rounded),
               style: IconButton.styleFrom(
                 backgroundColor: isListening
                     ? const Color(0xFF7D1010)
@@ -1093,8 +1782,8 @@ class _SpeakingCard extends StatelessWidget {
           isListening
               ? 'Ακούω...'
               : spokenText.isEmpty
-                  ? 'Πάτα το μικρόφωνο και πες τη λέξη.'
-                  : spokenText,
+              ? 'Πάτα το μικρόφωνο και πες τη λέξη.'
+              : spokenText,
           textAlign: TextAlign.center,
           style: const TextStyle(
             color: Color(0xFF173A8A),
@@ -1102,9 +1791,10 @@ class _SpeakingCard extends StatelessWidget {
             fontWeight: FontWeight.w800,
           ),
         ),
-        _AnswerResult(correct: lastAnswerCorrect, correctAnswer: word.word),
-        if (lastAnswerCorrect != null)
+        if (lastAnswerCorrect == true) ...[
+          const SizedBox(height: 18),
           FilledButton(onPressed: onNext, child: const Text('Επόμενη')),
+        ],
       ],
     );
   }
@@ -1145,7 +1835,9 @@ class _MultipleChoiceCard extends StatelessWidget {
           _ChoiceButton(
             label: choice,
             selected: selectedChoice == choice,
-            correct: selectedChoice == null ? null : choice == word.translationGr,
+            correct: selectedChoice == null
+                ? null
+                : choice == word.translationGr,
             onTap: () => onSelected(choice),
           ),
           const SizedBox(height: 10),
@@ -1165,6 +1857,7 @@ class _WrittenCard extends StatelessWidget {
     required this.controller,
     required this.lastAnswerCorrect,
     required this.correctAnswer,
+    required this.lockCheckAfterAnswer,
     required this.onSpeak,
     required this.onCheck,
     required this.onNext,
@@ -1175,12 +1868,17 @@ class _WrittenCard extends StatelessWidget {
   final TextEditingController controller;
   final bool? lastAnswerCorrect;
   final String correctAnswer;
+  final bool lockCheckAfterAnswer;
   final VoidCallback? onSpeak;
   final VoidCallback onCheck;
   final VoidCallback onNext;
 
   @override
   Widget build(BuildContext context) {
+    final checkDisabled =
+        lastAnswerCorrect == false ||
+        (lockCheckAfterAnswer && lastAnswerCorrect != null);
+
     return _PracticePanel(
       children: [
         if (onSpeak != null)
@@ -1205,7 +1903,11 @@ class _WrittenCard extends StatelessWidget {
         TextField(
           controller: controller,
           textInputAction: TextInputAction.done,
-          onSubmitted: (_) => onCheck(),
+          onSubmitted: (_) {
+            if (!checkDisabled) {
+              onCheck();
+            }
+          },
           decoration: InputDecoration(
             hintText: helper,
             filled: true,
@@ -1218,7 +1920,7 @@ class _WrittenCard extends StatelessWidget {
         ),
         const SizedBox(height: 14),
         FilledButton(
-          onPressed: lastAnswerCorrect == false ? null : onCheck,
+          onPressed: checkDisabled ? null : onCheck,
           child: const Text('Έλεγχος'),
         ),
         _AnswerResult(correct: lastAnswerCorrect, correctAnswer: correctAnswer),
@@ -1282,17 +1984,24 @@ class _ChoiceButton extends StatelessWidget {
 }
 
 class _PracticePanel extends StatelessWidget {
-  const _PracticePanel({required this.children});
+  const _PracticePanel({
+    required this.children,
+    this.backgroundColor = const Color(0xFFEAF7FF),
+    this.borderColor = Colors.transparent,
+  });
 
   final List<Widget> children;
+  final Color backgroundColor;
+  final Color borderColor;
 
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: const Color(0xFFEAF7FF),
+        color: backgroundColor,
         borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: borderColor, width: 2),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1320,8 +2029,8 @@ class _AnswerResult extends StatelessWidget {
         correct!
             ? 'Σωστό'
             : correctAnswer == null
-                ? 'Δοκίμασε ξανά'
-                : 'Σωστό: $correctAnswer',
+            ? 'Δοκίμασε ξανά'
+            : 'Σωστό: $correctAnswer',
         textAlign: TextAlign.center,
         style: TextStyle(
           color: correct! ? const Color(0xFF2D7D10) : const Color(0xFF7D1010),
@@ -1428,7 +2137,7 @@ class _WrongAttemptCard extends StatelessWidget {
                 fontSize: 15,
                 fontWeight: FontWeight.w900,
               ),
-            )
+            ),
           ],
         ],
       ),
@@ -1471,7 +2180,8 @@ class _LetterDiffText extends StatelessWidget {
             TextSpan(
               text: typedText[index],
               style: TextStyle(
-                color: index < correctText.length &&
+                color:
+                    index < correctText.length &&
                         typedText[index].toLowerCase() ==
                             correctText[index].toLowerCase()
                     ? const Color(0xFF2D7D10)
@@ -1663,9 +2373,9 @@ String _modeLabel(_VocMode mode) {
     case _VocMode.multipleChoice:
       return 'Quiz';
     case _VocMode.writeGreek:
-      return 'Ξένη Γλώσσα - Ελληνικά';
+      return 'Ξένη Γλώσσα – Ελληνικά';
     case _VocMode.writeForeign:
-      return 'Ελληνικά - Ξένη Γλώσσα';
+      return 'Ελληνικά – Ξένη Γλώσσα';
   }
 }
 
