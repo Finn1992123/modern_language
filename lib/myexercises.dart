@@ -102,6 +102,8 @@ class _MyExercisesPageState extends State<MyExercisesPage> {
           assignmentSession: session,
         ),
         'hangman' => HangmanHomePage(
+          studentId: widget.studentId,
+          classId: widget.classId,
           languageLabel: widget.languageLabel,
           assignmentSession: session,
         ),
@@ -303,6 +305,31 @@ class _AssignmentCard extends StatelessWidget {
               ),
             ),
           ],
+          if (assignment.completed && assignment.displayScore != null) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF178A45).withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.grade_rounded, color: Color(0xFF178A45)),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Βαθμός: ${_formatScore(assignment.displayScore!)}%',
+                    style: const TextStyle(
+                      color: Color(0xFF178A45),
+                      fontSize: 16,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 14),
           FilledButton.icon(
             onPressed: assignment.canStart && !loading ? onStart : null,
@@ -382,6 +409,14 @@ class _StudentAssignment {
   bool get canStart =>
       !completed && !expired && !upcoming && !attemptsExhausted;
 
+  double? get displayScore {
+    if (bestScore != null) return bestScore!.clamp(0, 100);
+    if (completed && (activityType == 'reader' || activityType == 'hangman')) {
+      return 100;
+    }
+    return null;
+  }
+
   String get activityLabel => switch (activityType) {
     'reader' => 'Reader',
     'vocabulary' => 'Study your voc',
@@ -410,14 +445,21 @@ class _StudentAssignment {
   };
 
   String get goalLabel {
+    final personalWords =
+        settings['personal_words'] == true ||
+        settings['unit'] == '__personal__';
     if (activityType == 'reader') {
       return 'Στόχος: ${settings['required_count']} κείμενα';
     }
     if (activityType == 'vocabulary') {
-      return '${_modeLabel(settings['mode']?.toString())} · Επιτυχία ≥ ${settings['pass_percentage']}%';
+      return personalWords
+          ? 'Προσωπικές λέξεις · Επιτυχία ≥ ${settings['pass_percentage']}%'
+          : '${_modeLabel(settings['mode']?.toString())} · Επιτυχία ≥ ${settings['pass_percentage']}%';
     }
     if (activityType == 'hangman') {
-      return 'Βρες ${settings['required_count']} λέξεις · ${settings['unit']}';
+      return personalWords
+          ? 'Βρες $targetValue προσωπικές λέξεις'
+          : 'Βρες ${settings['required_count']} λέξεις · ${settings['unit']}';
     }
     if (activityType == 'identify_tense' || activityType == 'study_grammar') {
       final type = settings['limit_type']?.toString();
@@ -459,6 +501,10 @@ class _StudentAssignment {
     return attemptCount == 0 ? 'Έναρξη' : 'Συνέχεια / νέα προσπάθεια';
   }
 }
+
+String _formatScore(double score) => score == score.roundToDouble()
+    ? score.toStringAsFixed(0)
+    : score.toStringAsFixed(1);
 
 String _modeLabel(String? mode) => switch (mode) {
   'speaking' => 'Προφορά λέξεων',

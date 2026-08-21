@@ -39,6 +39,7 @@ dependencies:
   flutter_tts: ^4.2.5
   speech_to_text: ^7.4.0
   flutter_card_swiper: ^7.2.0
+  flutter_confetti: ^0.5.1
 
 dev_dependencies:
   flutter_test:
@@ -97,6 +98,14 @@ flutter:
     - lib/img/identifythetense.png
     - lib/img/studyyourgram.png
     - lib/img/reader.png
+    - lib/img/quiet.png
+    - lib/img/reading.png
+    - lib/img/speaking.png
+    - lib/img/try.png
+    - lib/img/vocabulary.png
+    - lib/img/dictation.png
+    - lib/img/participation.png
+    - lib/img/grammar.png
 
   # To add assets to your application, add an assets section, like this:
   # assets:

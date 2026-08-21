@@ -28,6 +28,7 @@ class _TeacherExercisesPageState extends State<TeacherExercisesPage> {
   String _readerLevel = 'junior_a';
   String _vocabularyMode = 'multiple_choice';
   bool _importantOnly = false;
+  bool _personalWords = false;
   bool _unlimitedAttempts = true;
   bool _noDueDate = true;
   DateTime? _dueDate;
@@ -120,6 +121,7 @@ class _TeacherExercisesPageState extends State<TeacherExercisesPage> {
     setState(() {
       _activity = value;
       _selectedUnit = null;
+      _personalWords = false;
       _requiredCountController.text = switch (value) {
         _ActivityType.reader => '3',
         _ActivityType.vocabulary => '1',
@@ -140,6 +142,7 @@ class _TeacherExercisesPageState extends State<TeacherExercisesPage> {
     }
     if ((_activity == _ActivityType.vocabulary ||
             _activity == _ActivityType.hangman) &&
+        !_personalWords &&
         _selectedUnit == null) {
       _showMessage('Επίλεξε ενότητα.');
       return;
@@ -167,6 +170,10 @@ class _TeacherExercisesPageState extends State<TeacherExercisesPage> {
       if (_activity == _ActivityType.vocabulary) ...{
         'mode': _vocabularyMode,
         'important_only': _importantOnly,
+      },
+      if (_activity == _ActivityType.vocabulary ||
+          _activity == _ActivityType.hangman) ...{
+        'personal_words': _personalWords,
       },
       if (standardActivity) ...{
         'limit_type': _standardLimitType,
@@ -198,6 +205,7 @@ class _TeacherExercisesPageState extends State<TeacherExercisesPage> {
         _titleController.clear();
         _instructionsController.clear();
         _selectedUnit = null;
+        _personalWords = false;
         _selectedGrammarTopics.clear();
         _unlimitedAttempts = true;
         _noDueDate = true;
@@ -565,12 +573,48 @@ class _TeacherExercisesPageState extends State<TeacherExercisesPage> {
     }
 
     return [
-      if (_loadingUnits)
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('Προσωπικές λέξεις'),
+        subtitle: const Text(
+          'Κάθε μαθητής θα πάρει λέξεις από τη δική του λίστα λαθών.',
+        ),
+        value: _personalWords,
+        onChanged: (value) {
+          setState(() {
+            _personalWords = value;
+            _selectedUnit = null;
+            _importantOnly = false;
+            _requiredCountController.text = value
+                ? '10'
+                : (_activity == _ActivityType.hangman ? '5' : '1');
+            if (value && _vocabularyMode == 'speaking') {
+              _vocabularyMode = 'multiple_choice';
+            }
+          });
+        },
+      ),
+      if (_personalWords) ...[
+        const SizedBox(height: 8),
+        TextFormField(
+          controller: _requiredCountController,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(
+            labelText: 'Μέγιστος αριθμός προσωπικών λέξεων',
+            helperText:
+                'Αν ένας μαθητής έχει λιγότερες, θα πάρει όσες διαθέτει.',
+            border: OutlineInputBorder(),
+          ),
+          validator: _positiveIntegerValidator,
+        ),
+        const SizedBox(height: 14),
+      ],
+      if (_loadingUnits && !_personalWords)
         const Padding(
           padding: EdgeInsets.all(12),
           child: Center(child: CircularProgressIndicator()),
         )
-      else
+      else if (!_personalWords)
         DropdownButtonFormField<_VocabularyUnit>(
           initialValue: _selectedUnit,
           isExpanded: true,
@@ -601,16 +645,17 @@ class _TeacherExercisesPageState extends State<TeacherExercisesPage> {
             labelText: 'Είδος εξάσκησης',
             border: OutlineInputBorder(),
           ),
-          items: const [
-            DropdownMenuItem(
-              value: 'speaking',
-              child: Text(
-                'Προφορά λέξεων',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+          items: [
+            if (!_personalWords)
+              const DropdownMenuItem(
+                value: 'speaking',
+                child: Text(
+                  'Προφορά λέξεων',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-            ),
-            DropdownMenuItem(
+            const DropdownMenuItem(
               value: 'multiple_choice',
               child: Text(
                 'Πολλαπλής επιλογής',
@@ -639,14 +684,15 @@ class _TeacherExercisesPageState extends State<TeacherExercisesPage> {
             if (value != null) setState(() => _vocabularyMode = value);
           },
         ),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text('Μόνο σημαντικές λέξεις'),
-          subtitle: const Text('Απαιτείται βαθμολογία τουλάχιστον 71%'),
-          value: _importantOnly,
-          onChanged: (value) => setState(() => _importantOnly = value),
-        ),
-      ] else ...[
+        if (!_personalWords)
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Μόνο σημαντικές λέξεις'),
+            subtitle: const Text('Απαιτείται βαθμολογία τουλάχιστον 71%'),
+            value: _importantOnly,
+            onChanged: (value) => setState(() => _importantOnly = value),
+          ),
+      ] else if (!_personalWords) ...[
         const SizedBox(height: 14),
         TextFormField(
           controller: _requiredCountController,

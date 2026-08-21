@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'assignment_session.dart';
+import 'assignment_word_preview.dart';
 
 enum HangmanMode { solo, versus }
 
@@ -31,10 +32,14 @@ const _levelOptions = <_LevelOption>[
 class HangmanHomePage extends StatefulWidget {
   const HangmanHomePage({
     super.key,
+    required this.studentId,
+    required this.classId,
     required this.languageLabel,
     this.assignmentSession,
   });
 
+  final String studentId;
+  final String classId;
   final String languageLabel;
   final AssignmentSession? assignmentSession;
 
@@ -44,20 +49,89 @@ class HangmanHomePage extends StatefulWidget {
 
 class _HangmanHomePageState extends State<HangmanHomePage> {
   _LevelOption? _selectedLevel;
+  late final Future<List<AssignmentPreviewWord>>? _assignmentWordsFuture;
+  bool _startingAssignment = false;
 
   @override
   void initState() {
     super.initState();
-    if (widget.assignmentSession != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _startAssignment();
-      });
-    }
+    _assignmentWordsFuture = widget.assignmentSession == null
+        ? null
+        : _loadAssignmentWords(widget.assignmentSession!);
   }
 
-  Future<void> _startAssignment() async {
+  Future<List<AssignmentPreviewWord>> _loadAssignmentWords(
+    AssignmentSession session,
+  ) async {
+    final usesPersonalWords =
+        session.settings['personal_words'] == true ||
+        session.settings['unit'] == '__personal__';
+    final rows = usesPersonalWords
+        ? await Supabase.instance.client.rpc(
+            'get_student_assignment_vocabulary_words',
+            params: {
+              'input_assignment_id': session.assignmentId,
+              'input_student_id': session.studentId,
+              'input_class_id': session.classId,
+            },
+          )
+        : await Supabase.instance.client.rpc(
+            'get_student_study_vocabulary',
+            params: {
+              'input_student_id': session.studentId,
+              'input_class_id': session.classId,
+            },
+          );
+    if (rows is! List) return const [];
+
+    final unit = session.settings['unit']?.toString().trim() ?? '';
+    final level = session.settings['level']?.toString().trim() ?? '';
+    final unitOrder = (session.settings['unit_order'] as num?)?.toInt();
+    final completedWords = session.completedSourceKeys
+        .map((word) => word.trim().toUpperCase())
+        .toSet();
+    final uniqueWords = <String, AssignmentPreviewWord>{};
+    for (final value in rows) {
+      if (value is! Map) continue;
+      final row = Map<String, dynamic>.from(value);
+      final word = row['word']?.toString().trim() ?? '';
+      final translation = row['translation_gr']?.toString().trim() ?? '';
+      final rowUnit = row['unit']?.toString().trim() ?? '';
+      final rowLevel = row['level']?.toString().trim() ?? '';
+      final rowUnitOrder = (row['unit_order'] as num?)?.toInt();
+      final normalizedWord = word.toUpperCase();
+      final characters = normalizedWord.split('');
+      final letterCount = characters
+          .where((character) => RegExp(r'^[A-Z]$').hasMatch(character))
+          .length;
+      final isPlayable = characters.every(
+        (character) =>
+            RegExp(r'^[A-Z]$').hasMatch(character) || " -'".contains(character),
+      );
+      if (word.isEmpty || letterCount < 2 || !isPlayable) continue;
+      if (!usesPersonalWords) {
+        if (unit.isNotEmpty && rowUnit != unit) continue;
+        if (level.isNotEmpty && rowLevel != level) continue;
+        if (unitOrder != null && rowUnitOrder != unitOrder) continue;
+      }
+      if (completedWords.contains(normalizedWord)) continue;
+      uniqueWords.putIfAbsent(
+        normalizedWord,
+        () => AssignmentPreviewWord(
+          id: row['id']?.toString() ?? word,
+          word: word,
+          translation: translation.isEmpty ? '—' : translation,
+          partOfSpeech: row['part_of_speech']?.toString().trim(),
+        ),
+      );
+    }
+    return uniqueWords.values.toList();
+  }
+
+  Future<void> _startAssignment(List<AssignmentPreviewWord> words) async {
     final session = widget.assignmentSession;
-    if (session == null) return;
+    if (session == null || _startingAssignment) return;
+    setState(() => _startingAssignment = true);
     final level = session.settings['level']?.toString() ?? '';
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -65,8 +139,11 @@ class _HangmanHomePageState extends State<HangmanHomePage> {
           level: _LevelOption(level, level),
           mode: HangmanMode.solo,
           languageLabel: widget.languageLabel,
+          studentId: widget.studentId,
+          classId: widget.classId,
           unit: session.settings['unit']?.toString(),
           assignmentSession: session,
+          assignmentWords: words,
         ),
       ),
     );
@@ -88,8 +165,11 @@ class _HangmanHomePageState extends State<HangmanHomePage> {
           level: level,
           mode: mode,
           languageLabel: widget.languageLabel,
+          studentId: widget.studentId,
+          classId: widget.classId,
           unit: null,
           assignmentSession: null,
+          assignmentWords: null,
         ),
       ),
     );
@@ -97,6 +177,54 @@ class _HangmanHomePageState extends State<HangmanHomePage> {
 
   @override
   Widget build(BuildContext context) {
+    final assignmentWordsFuture = _assignmentWordsFuture;
+    if (assignmentWordsFuture != null) {
+      return Scaffold(
+        backgroundColor: const Color(0xFFF8F7FF),
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          surfaceTintColor: Colors.transparent,
+          title: const Text(
+            'Προετοιμασία Hangman',
+            style: TextStyle(fontWeight: FontWeight.w900),
+          ),
+          centerTitle: true,
+        ),
+        body: FutureBuilder<List<AssignmentPreviewWord>>(
+          future: assignmentWordsFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (snapshot.hasError || (snapshot.data?.isEmpty ?? true)) {
+              return const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(28),
+                  child: Text(
+                    'Δεν μπορέσαμε να φορτώσουμε τις λέξεις της άσκησης.',
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              );
+            }
+            final words = snapshot.data!;
+            return SafeArea(
+              top: false,
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 30),
+                children: [
+                  AssignmentWordPreview(
+                    words: words,
+                    onCompleted: () => _startAssignment(words),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: const Color(0xFFF8F7FF),
       appBar: AppBar(
@@ -259,15 +387,21 @@ class _HangmanGamePage extends StatefulWidget {
     required this.level,
     required this.mode,
     required this.languageLabel,
+    required this.studentId,
+    required this.classId,
     required this.unit,
     required this.assignmentSession,
+    required this.assignmentWords,
   });
 
   final _LevelOption level;
   final HangmanMode mode;
   final String languageLabel;
+  final String studentId;
+  final String classId;
   final String? unit;
   final AssignmentSession? assignmentSession;
+  final List<AssignmentPreviewWord>? assignmentWords;
 
   @override
   State<_HangmanGamePage> createState() => _HangmanGamePageState();
@@ -277,8 +411,8 @@ class _HangmanGamePageState extends State<_HangmanGamePage> {
   static const _alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   final _random = Random();
 
-  late Future<List<String>> _wordsFuture = _loadWords();
-  List<String> _words = const [];
+  late Future<List<AssignmentPreviewWord>> _wordsFuture = _loadWords();
+  List<AssignmentPreviewWord> _words = const [];
   int _wordIndex = 0;
   Set<int> _revealedPositions = <int>{};
   Set<String> _guessedLetters = <String>{};
@@ -292,7 +426,7 @@ class _HangmanGamePageState extends State<_HangmanGamePage> {
   Timer? _nextWordTimer;
   late int _assignmentProgress = widget.assignmentSession?.progressValue ?? 0;
 
-  String get _currentWord => _words[_wordIndex];
+  String get _currentWord => _words[_wordIndex].word;
 
   @override
   void dispose() {
@@ -300,38 +434,68 @@ class _HangmanGamePageState extends State<_HangmanGamePage> {
     super.dispose();
   }
 
-  Future<List<String>> _loadWords() async {
-    dynamic query = Supabase.instance.client
-        .from('vocabulary_words')
-        .select('word')
-        .eq('level', widget.level.databaseLevel)
-        .eq('is_active', true);
-
-    if (widget.languageLabel.trim().isNotEmpty) {
-      query = query.ilike('language', widget.languageLabel.trim());
+  Future<List<AssignmentPreviewWord>> _loadWords() async {
+    final assignmentWords = widget.assignmentWords;
+    if (assignmentWords != null) {
+      final completedWords =
+          widget.assignmentSession?.completedSourceKeys
+              .map((word) => word.trim().toUpperCase())
+              .toSet() ??
+          const <String>{};
+      final words = assignmentWords
+          .map(
+            (word) => AssignmentPreviewWord(
+              id: word.id,
+              word: word.word.trim().toUpperCase(),
+              translation: word.translation,
+              partOfSpeech: word.partOfSpeech,
+            ),
+          )
+          .where(
+            (word) =>
+                !completedWords.contains(word.word) &&
+                word.word.split('').where(_isLetter).length >= 2 &&
+                word.word.split('').every(_isPlayableCharacter),
+          )
+          .toList();
+      return words..shuffle(_random);
     }
-    if (widget.unit?.trim().isNotEmpty == true) {
-      query = query.eq('unit', widget.unit!.trim());
-    }
 
-    final rows = await query;
-    final uniqueWords = <String>{};
-    for (final row in rows as List) {
-      if (row is! Map || row['word'] is! String) {
-        continue;
-      }
-      final word = (row['word'] as String).trim().toUpperCase();
-      if (widget.assignmentSession?.completedSourceKeys.contains(word) ==
-          true) {
+    final rows = await Supabase.instance.client.rpc(
+      'get_student_study_vocabulary',
+      params: {
+        'input_student_id': widget.studentId,
+        'input_class_id': widget.classId,
+      },
+    );
+    if (rows is! List) return const [];
+    final uniqueWords = <String, AssignmentPreviewWord>{};
+    for (final value in rows) {
+      if (value is! Map) continue;
+      final row = Map<String, dynamic>.from(value);
+      final word = row['word']?.toString().trim().toUpperCase() ?? '';
+      final language = row['language']?.toString().trim() ?? '';
+      final level = row['level']?.toString().trim() ?? '';
+      if (level != widget.level.databaseLevel) continue;
+      if (widget.languageLabel.trim().isNotEmpty &&
+          language.toLowerCase() != widget.languageLabel.trim().toLowerCase()) {
         continue;
       }
       final letters = word.split('').where(_isLetter).length;
       if (letters >= 2 && word.split('').every(_isPlayableCharacter)) {
-        uniqueWords.add(word);
+        uniqueWords.putIfAbsent(
+          word,
+          () => AssignmentPreviewWord(
+            id: row['id']?.toString() ?? '',
+            word: word,
+            translation: row['translation_gr']?.toString().trim() ?? '',
+            partOfSpeech: row['part_of_speech']?.toString().trim(),
+          ),
+        );
       }
     }
 
-    return uniqueWords.toList()..shuffle(_random);
+    return uniqueWords.values.toList()..shuffle(_random);
   }
 
   static bool _isLetter(String character) {
@@ -342,7 +506,7 @@ class _HangmanGamePageState extends State<_HangmanGamePage> {
     return _isLetter(character) || " -'".contains(character);
   }
 
-  void _initializeGame(List<String> words) {
+  void _initializeGame(List<AssignmentPreviewWord> words) {
     _words = words;
     _wordIndex = 0;
     _soloScore = 0;
@@ -421,12 +585,18 @@ class _HangmanGamePageState extends State<_HangmanGamePage> {
 
     final session = widget.assignmentSession;
     if (session != null) {
+      if (session.settings['personal_words'] == true ||
+          session.settings['unit'] == '__personal__') {
+        unawaited(_recordPersonalWordSuccess(_words[_wordIndex].id));
+      }
       _assignmentProgress++;
       final reachedTarget = _assignmentProgress >= session.targetValue;
       unawaited(
         session
             .saveProgress(
               progress: _assignmentProgress,
+              scorePercentage:
+                  (_assignmentProgress / session.targetValue) * 100,
               finishAttempt: false,
               sourceKey: completedWord,
             )
@@ -468,9 +638,14 @@ class _HangmanGamePageState extends State<_HangmanGamePage> {
 
   void _finishGame() {
     _gameFinished = true;
+    if (widget.mode == HangmanMode.solo) {
+      unawaited(_recordHangmanMistake());
+    }
     final assignmentSession = widget.assignmentSession;
     final assignmentFinishFuture = assignmentSession?.saveProgress(
       progress: _assignmentProgress,
+      scorePercentage:
+          (_assignmentProgress / assignmentSession.targetValue) * 100,
       finishAttempt: true,
     );
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -537,6 +712,44 @@ class _HangmanGamePageState extends State<_HangmanGamePage> {
     });
   }
 
+  Future<void> _recordHangmanMistake() async {
+    if (widget.assignmentSession == null) return;
+    final word = _words[_wordIndex];
+    if (word.id.isEmpty) return;
+    try {
+      await Supabase.instance.client.rpc(
+        'record_student_vocabulary_mistake',
+        params: {
+          'input_student_id': widget.studentId,
+          'input_class_id': widget.classId,
+          'input_vocabulary_word_id': word.id,
+          'input_source': 'hangman',
+          'input_wrong_answer': null,
+        },
+      );
+    } catch (_) {
+      // Η αποθήκευση της λανθασμένης λέξης δεν διακόπτει το παιχνίδι.
+    }
+  }
+
+  Future<void> _recordPersonalWordSuccess(String vocabularyWordId) async {
+    final session = widget.assignmentSession;
+    if (session == null || vocabularyWordId.isEmpty) return;
+    try {
+      await Supabase.instance.client.rpc(
+        'record_personal_vocabulary_assignment_successes',
+        params: {
+          'input_assignment_id': session.assignmentId,
+          'input_student_id': widget.studentId,
+          'input_class_id': widget.classId,
+          'input_vocabulary_word_ids': [vocabularyWordId],
+        },
+      );
+    } catch (_) {
+      // Η πρόοδος της άσκησης δεν διακόπτεται αν αποτύχει ο συγχρονισμός.
+    }
+  }
+
   void _showAssignmentSuccess() {
     _gameFinished = true;
     showDialog<void>(
@@ -553,7 +766,8 @@ class _HangmanGamePageState extends State<_HangmanGamePage> {
           textAlign: TextAlign.center,
         ),
         content: Text(
-          'Βρήκες $_assignmentProgress/${widget.assignmentSession!.targetValue} λέξεις.',
+          'Βρήκες $_assignmentProgress/${widget.assignmentSession!.targetValue} λέξεις.\n'
+          'Βαθμός: 100%',
           textAlign: TextAlign.center,
         ),
         actionsAlignment: MainAxisAlignment.center,
@@ -589,7 +803,7 @@ class _HangmanGamePageState extends State<_HangmanGamePage> {
         ),
         centerTitle: true,
       ),
-      body: FutureBuilder<List<String>>(
+      body: FutureBuilder<List<AssignmentPreviewWord>>(
         future: _wordsFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState != ConnectionState.done) {
@@ -601,7 +815,7 @@ class _HangmanGamePageState extends State<_HangmanGamePage> {
               onRetry: _retryLoading,
             );
           }
-          final words = snapshot.data ?? const <String>[];
+          final words = snapshot.data ?? const <AssignmentPreviewWord>[];
           if (words.isEmpty) {
             return _LoadProblem(
               message:

@@ -8,6 +8,7 @@ import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'assignment_session.dart';
+import 'assignment_word_preview.dart';
 
 enum _VocMode { study, speaking, multipleChoice, writeGreek, writeForeign }
 
@@ -36,7 +37,6 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
   final CardSwiperController _studySwiperController = CardSwiperController();
   final TextEditingController _answerController = TextEditingController();
   final Random _random = Random();
-  Timer? _studyIndexTimer;
 
   _VocMode? _mode;
   String? _selectedUnit;
@@ -50,21 +50,33 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
   bool _speechResultHandled = false;
   int _speechSessionId = 0;
   int _ttsSessionId = 0;
+  Future<void>? _ttsReady;
   String _spokenText = '';
   bool _importantOnly = false;
   bool _unitValidationError = false;
+  final Set<String> _learnedWordIds = {};
+  final Set<String> _recordedMistakeWordIds = {};
   final List<_VocAttempt> _attempts = [];
   bool _assignmentResultSaved = false;
+  bool _assignmentPreviewCompleted = false;
   Future<void>? _assignmentSaveFuture;
+
+  bool get _usesPersonalWords =>
+      widget.assignmentSession?.settings['personal_words'] == true ||
+      widget.assignmentSession?.settings['unit'] == '__personal__';
 
   @override
   void initState() {
     super.initState();
     final session = widget.assignmentSession;
     if (session == null) return;
-    final unit = session.settings['unit']?.toString() ?? '';
-    final order = (session.settings['unit_order'] as num?)?.toInt();
-    _selectedUnit = '${order ?? 999999}::$unit';
+    if (_usesPersonalWords) {
+      _selectedUnit = 'personal';
+    } else {
+      final unit = session.settings['unit']?.toString() ?? '';
+      final order = (session.settings['unit_order'] as num?)?.toInt();
+      _selectedUnit = '${order ?? 999999}::$unit';
+    }
     _importantOnly = session.settings['important_only'] == true;
     _mode = switch (session.settings['mode']?.toString()) {
       'speaking' => _VocMode.speaking,
@@ -77,7 +89,6 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
 
   @override
   void dispose() {
-    _studyIndexTimer?.cancel();
     _speechSessionId++;
     _ttsSessionId++;
     _answerController.dispose();
@@ -88,13 +99,23 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
   }
 
   Future<List<_VocWord>> _loadWords() async {
-    final rows = await Supabase.instance.client.rpc(
-      'get_student_study_vocabulary',
-      params: {
-        'input_student_id': widget.studentId,
-        'input_class_id': widget.classId,
-      },
-    );
+    final session = widget.assignmentSession;
+    final rows = _usesPersonalWords && session != null
+        ? await Supabase.instance.client.rpc(
+            'get_student_assignment_vocabulary_words',
+            params: {
+              'input_assignment_id': session.assignmentId,
+              'input_student_id': widget.studentId,
+              'input_class_id': widget.classId,
+            },
+          )
+        : await Supabase.instance.client.rpc(
+            'get_student_study_vocabulary',
+            params: {
+              'input_student_id': widget.studentId,
+              'input_class_id': widget.classId,
+            },
+          );
 
     if (rows is! List) {
       return const [];
@@ -108,7 +129,6 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
   }
 
   void _selectUnit(String? unit) {
-    _studyIndexTimer?.cancel();
     setState(() {
       _selectedUnit = unit;
       _unitValidationError = false;
@@ -124,11 +144,14 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
       return;
     }
 
-    _studyIndexTimer?.cancel();
     setState(() {
       _mode = mode;
       _unitValidationError = false;
       _wordIndex = 0;
+      if (mode == _VocMode.study) {
+        _learnedWordIds.clear();
+      }
+      _recordedMistakeWordIds.clear();
       _attempts.clear();
       _resetQuestionState();
     });
@@ -168,15 +191,44 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
     final language = word.language.isEmpty
         ? widget.languageLabel
         : word.language;
-    await _tts.setLanguage(_ttsLanguage(language));
+    try {
+      await (_ttsReady ??= _initializeTts()).timeout(
+        const Duration(seconds: 6),
+      );
+      if (!mounted || sessionId != _ttsSessionId) return;
+
+      final languageResult = await _tts
+          .setLanguage(_ttsLanguage(language))
+          .timeout(const Duration(seconds: 6));
+      if (languageResult != 1) {
+        throw StateError('TTS language is not installed');
+      }
+      if (!mounted || sessionId != _ttsSessionId) return;
+
+      final speakResult = await _tts
+          .speak(word.word, focus: true)
+          .timeout(const Duration(seconds: 6));
+      if (speakResult != 1) {
+        throw StateError('TTS engine did not start');
+      }
+    } catch (_) {
+      _ttsReady = null;
+      if (!mounted || sessionId != _ttsSessionId) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Δεν είναι διαθέσιμη η εκφώνηση. Ελέγξτε ότι υπάρχει εγκατεστημένη φωνή Text-to-Speech στη συσκευή.',
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  Future<void> _initializeTts() async {
+    await _tts.awaitSpeakCompletion(false);
     await _tts.setSpeechRate(0.42);
     await _tts.setPitch(1);
-
-    if (sessionId != _ttsSessionId) {
-      return;
-    }
-
-    await _tts.speak(word.word);
   }
 
   Future<void> _toggleListening(_VocWord word) async {
@@ -308,24 +360,47 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
     final correctAnswer = toGreek ? word.translationGr : word.word;
     final prompt = toGreek ? word.word : word.translationGr;
     final mode = toGreek ? _VocMode.writeGreek : _VocMode.writeForeign;
+    final isCorrect = correctAnswers.any((correct) {
+      if (toGreek) return _answersMatch(answer, correct);
+      return _exactAnswerMatch(answer, correct);
+    });
 
     setState(() {
-      _lastAnswerCorrect = correctAnswers.any((correct) {
-        if (toGreek) {
-          return _answersMatch(answer, correct);
-        }
-
-        return _exactAnswerMatch(answer, correct);
-      });
+      _lastAnswerCorrect = isCorrect;
       _recordAttempt(
         mode: mode,
         word: word,
         prompt: prompt,
         userAnswer: answer,
         correctAnswer: correctAnswer,
-        correct: _lastAnswerCorrect ?? false,
+        correct: isCorrect,
       );
     });
+    if (!isCorrect) {
+      unawaited(_recordVocabularyMistake(word, answer));
+    }
+  }
+
+  Future<void> _recordVocabularyMistake(
+    _VocWord word,
+    String wrongAnswer,
+  ) async {
+    if (widget.assignmentSession == null) return;
+    if (!_recordedMistakeWordIds.add(word.id)) return;
+    try {
+      await Supabase.instance.client.rpc(
+        'record_student_vocabulary_mistake',
+        params: {
+          'input_student_id': widget.studentId,
+          'input_class_id': widget.classId,
+          'input_vocabulary_word_id': word.id,
+          'input_source': 'study_your_voc',
+          'input_wrong_answer': wrongAnswer.trim(),
+        },
+      );
+    } catch (_) {
+      _recordedMistakeWordIds.remove(word.id);
+    }
   }
 
   void _recordAttempt({
@@ -487,6 +562,27 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
     final session = widget.assignmentSession;
     if (session == null) return;
     try {
+      if (_usesPersonalWords) {
+        final correctWordIds = _attempts
+            .where((attempt) => attempt.correct)
+            .map((attempt) => attempt.wordId)
+            .toSet()
+            .toList();
+        try {
+          await Supabase.instance.client.rpc(
+            'record_personal_vocabulary_assignment_successes',
+            params: {
+              'input_assignment_id': session.assignmentId,
+              'input_student_id': widget.studentId,
+              'input_class_id': widget.classId,
+              'input_vocabulary_word_ids': correctWordIds,
+            },
+          );
+        } catch (_) {
+          // Η βαθμολογία της άσκησης αποθηκεύεται ακόμη κι αν αποτύχει
+          // προσωρινά ο συγχρονισμός της προσωπικής λίστας.
+        }
+      }
       final passed = await session.saveProgress(
         progress: percent,
         scorePercentage: percent.toDouble(),
@@ -541,15 +637,55 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
               );
             }
 
-            final words = allWords
-                .where(
-                  (word) =>
-                      word.unitKey == _selectedUnit &&
-                      (!_importantOnly || word.isImportant),
-                )
-                .toList();
+            final selectedWords = _usesPersonalWords
+                ? allWords
+                : allWords
+                      .where(
+                        (word) =>
+                            word.unitKey == _selectedUnit &&
+                            (!_importantOnly || word.isImportant),
+                      )
+                      .toList();
+            final words = _mode == _VocMode.study
+                ? selectedWords
+                      .where((word) => !_learnedWordIds.contains(word.id))
+                      .toList()
+                : selectedWords;
+            final studyCompleted =
+                _mode == _VocMode.study &&
+                selectedWords.isNotEmpty &&
+                words.isEmpty;
 
-            if (_mode == null || words.isEmpty) {
+            if (widget.assignmentSession != null &&
+                !_assignmentPreviewCompleted &&
+                selectedWords.isNotEmpty) {
+              return ListView(
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 30),
+                children: [
+                  AssignmentWordPreview(
+                    words: selectedWords
+                        .map(
+                          (word) => AssignmentPreviewWord(
+                            id: word.id,
+                            word: word.word,
+                            translation: word.translationGr,
+                            partOfSpeech: word.partOfSpeech,
+                          ),
+                        )
+                        .toList(),
+                    onCompleted: () {
+                      setState(() {
+                        _assignmentPreviewCompleted = true;
+                        _wordIndex = 0;
+                        _resetQuestionState();
+                      });
+                    },
+                  ),
+                ],
+              );
+            }
+
+            if (_mode == null || (words.isEmpty && !studyCompleted)) {
               return ListView(
                 padding: EdgeInsets.zero,
                 children: [
@@ -570,6 +706,31 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
                     },
                     onModeSelected: _selectMode,
                     showEmptyMessage: _selectedUnit != null && words.isEmpty,
+                  ),
+                ],
+              );
+            }
+
+            if (studyCompleted) {
+              return ListView(
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+                children: [
+                  _ModeHeader(
+                    mode: _VocMode.study,
+                    onBack: () => _selectMode(null),
+                  ),
+                  const SizedBox(height: 14),
+                  _StudyCompletedCard(
+                    wordCount: selectedWords.length,
+                    onReviewAgain: () {
+                      setState(() {
+                        _learnedWordIds.removeAll(
+                          selectedWords.map((word) => word.id),
+                        );
+                        _wordIndex = 0;
+                        _resetQuestionState();
+                      });
+                    },
                   ),
                 ],
               );
@@ -604,19 +765,21 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
                   onSpeak: () => _speak(current),
                   onStudySpeak: _speak,
                   onStudyIndexChanged: (index) {
-                    _studyIndexTimer?.cancel();
-                    _studyIndexTimer = Timer(
-                      const Duration(milliseconds: 340),
-                      () {
-                        if (!mounted || _mode != _VocMode.study) {
-                          return;
-                        }
-                        setState(() {
-                          _wordIndex = index;
-                          _resetQuestionState();
-                        });
-                      },
-                    );
+                    if (!mounted || _mode != _VocMode.study) return;
+                    setState(() {
+                      _wordIndex = index;
+                      _resetQuestionState();
+                    });
+                  },
+                  onStudyLearned: () {
+                    setState(() {
+                      _learnedWordIds.add(current.id);
+                      final remainingCount = words.length - 1;
+                      _wordIndex = remainingCount == 0
+                          ? 0
+                          : currentIndex.clamp(0, remainingCount - 1);
+                      _resetQuestionState();
+                    });
                   },
                   onFlip: () => setState(() => _isFlipped = !_isFlipped),
                   onListen: () => _toggleListening(current),
@@ -634,6 +797,9 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
                         correct: isCorrect,
                       );
                     });
+                    if (!isCorrect) {
+                      unawaited(_recordVocabularyMistake(current, choice));
+                    }
                     if (isCorrect) {
                       _speak(current);
                     }
@@ -1444,6 +1610,7 @@ class _ModeBody extends StatelessWidget {
     required this.onSpeak,
     required this.onStudySpeak,
     required this.onStudyIndexChanged,
+    required this.onStudyLearned,
     required this.onFlip,
     required this.onListen,
     required this.onChoiceSelected,
@@ -1468,6 +1635,7 @@ class _ModeBody extends StatelessWidget {
   final VoidCallback onSpeak;
   final ValueChanged<_VocWord> onStudySpeak;
   final ValueChanged<int> onStudyIndexChanged;
+  final VoidCallback onStudyLearned;
   final VoidCallback onFlip;
   final VoidCallback onListen;
   final ValueChanged<String> onChoiceSelected;
@@ -1487,6 +1655,7 @@ class _ModeBody extends StatelessWidget {
           onSpeak: onStudySpeak,
           onFlip: onFlip,
           onIndexChanged: onStudyIndexChanged,
+          onLearned: onStudyLearned,
         );
       case _VocMode.speaking:
         return _SpeakingCard(
@@ -1535,6 +1704,65 @@ class _ModeBody extends StatelessWidget {
   }
 }
 
+class _StudyCompletedCard extends StatelessWidget {
+  const _StudyCompletedCard({
+    required this.wordCount,
+    required this.onReviewAgain,
+  });
+
+  final int wordCount;
+  final VoidCallback onReviewAgain;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 42),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFFF0FFF3), Color(0xFFDDF7E5)],
+        ),
+        borderRadius: BorderRadius.circular(28),
+      ),
+      child: Column(
+        children: [
+          const Icon(
+            Icons.celebration_rounded,
+            color: Color(0xFF178A45),
+            size: 76,
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'Μπράβο!',
+            style: TextStyle(
+              color: Color(0xFF173A8A),
+              fontSize: 32,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Έμαθες και τις $wordCount λέξεις αυτής της ενότητας.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Color(0xFF526078),
+              fontSize: 17,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 26),
+          OutlinedButton.icon(
+            onPressed: onReviewAgain,
+            icon: const Icon(Icons.refresh_rounded),
+            label: const Text('Επανάληψη όλων'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _StudyCardStack extends StatelessWidget {
   const _StudyCardStack({
     required this.words,
@@ -1544,6 +1772,7 @@ class _StudyCardStack extends StatelessWidget {
     required this.onSpeak,
     required this.onFlip,
     required this.onIndexChanged,
+    required this.onLearned,
   });
 
   final List<_VocWord> words;
@@ -1553,6 +1782,7 @@ class _StudyCardStack extends StatelessWidget {
   final ValueChanged<_VocWord> onSpeak;
   final VoidCallback onFlip;
   final ValueChanged<int> onIndexChanged;
+  final VoidCallback onLearned;
 
   @override
   Widget build(BuildContext context) {
@@ -1582,10 +1812,12 @@ class _StudyCardStack extends StatelessWidget {
         cardBuilder: (context, index, percentX, percentY) {
           final word = words[index];
           return _StudyFlashCard(
+            key: ValueKey(word.id),
             word: word,
             isFlipped: index == currentIndex && isFlipped,
             onSpeak: () => onSpeak(word),
             onFlip: onFlip,
+            onLearned: onLearned,
           );
         },
       ),
@@ -1595,118 +1827,158 @@ class _StudyCardStack extends StatelessWidget {
 
 class _StudyFlashCard extends StatelessWidget {
   const _StudyFlashCard({
+    super.key,
     required this.word,
     required this.isFlipped,
     required this.onSpeak,
     required this.onFlip,
+    required this.onLearned,
   });
 
   final _VocWord word;
   final bool isFlipped;
   final VoidCallback onSpeak;
   final VoidCallback onFlip;
+  final VoidCallback onLearned;
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onFlip,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 240),
-        curve: Curves.easeOutCubic,
-        padding: const EdgeInsets.all(24),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: isFlipped
-                ? const [Color(0xFFFFFAE9), Color(0xFFFFEFC2)]
-                : const [Color(0xFFFDFEFF), Color(0xFFEAF5FF)],
-          ),
-          borderRadius: BorderRadius.circular(28),
-          border: Border.all(color: Colors.white, width: 1.6),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x246051B4),
-              blurRadius: 24,
-              offset: Offset(0, 14),
-            ),
-          ],
-        ),
-        child: Stack(
-          children: [
-            Positioned(
-              top: -48,
-              right: -32,
-              child: Container(
-                width: 140,
-                height: 140,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color:
-                      (isFlipped
-                              ? const Color(0xFFFFBD18)
-                              : const Color(0xFF5D65EA))
-                          .withValues(alpha: 0.12),
+      child: TweenAnimationBuilder<double>(
+        tween: Tween<double>(end: isFlipped ? pi : 0),
+        duration: const Duration(milliseconds: 520),
+        curve: Curves.easeInOutCubic,
+        builder: (context, angle, _) {
+          final showBack = angle >= pi / 2;
+          return Transform(
+            alignment: Alignment.center,
+            transform: Matrix4.identity()
+              ..setEntry(3, 2, 0.0015)
+              ..rotateY(angle),
+            child: Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: showBack
+                      ? const [Color(0xFFFFFAE9), Color(0xFFFFEFC2)]
+                      : const [Color(0xFFFDFEFF), Color(0xFFEAF5FF)],
                 ),
-              ),
-            ),
-            Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (!isFlipped)
-                    IconButton.filled(
-                      onPressed: onSpeak,
-                      icon: const Icon(Icons.volume_up_rounded),
-                      style: IconButton.styleFrom(
-                        backgroundColor: const Color(0xFF5D4BE2),
-                        foregroundColor: Colors.white,
-                        fixedSize: const Size(54, 54),
-                      ),
-                    ),
-                  SizedBox(height: isFlipped ? 0 : 20),
-                  AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 220),
-                    transitionBuilder: (child, animation) =>
-                        FadeTransition(opacity: animation, child: child),
-                    child: Text(
-                      isFlipped ? word.translationGr : word.word,
-                      key: ValueKey('${word.id}-$isFlipped'),
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: Color(0xFF173A8A),
-                        fontSize: 36,
-                        fontWeight: FontWeight.w900,
-                        height: 1.08,
-                      ),
-                    ),
-                  ),
-                  if (word.partOfSpeech != null) ...[
-                    const SizedBox(height: 10),
-                    Text(
-                      word.partOfSpeech!,
-                      style: const TextStyle(
-                        color: Color(0xFF6B6B78),
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 22),
-                  const Text(
-                    'Πάτησε για μετάφραση • Σύρε για επόμενη',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Color(0xFF77718F),
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                    ),
+                borderRadius: BorderRadius.circular(28),
+                border: Border.all(color: Colors.white, width: 1.6),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x246051B4),
+                    blurRadius: 24,
+                    offset: Offset(0, 14),
                   ),
                 ],
               ),
+              child: Transform(
+                alignment: Alignment.center,
+                transform: Matrix4.rotationY(showBack ? pi : 0),
+                child: Stack(
+                  children: [
+                    Positioned(
+                      top: -48,
+                      right: -32,
+                      child: Container(
+                        width: 140,
+                        height: 140,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color:
+                              (showBack
+                                      ? const Color(0xFFFFBD18)
+                                      : const Color(0xFF5D65EA))
+                                  .withValues(alpha: 0.12),
+                        ),
+                      ),
+                    ),
+                    Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (!showBack)
+                            IconButton.filled(
+                              onPressed: onSpeak,
+                              icon: const Icon(Icons.volume_up_rounded),
+                              style: IconButton.styleFrom(
+                                backgroundColor: const Color(0xFF5D4BE2),
+                                foregroundColor: Colors.white,
+                                fixedSize: const Size(54, 54),
+                              ),
+                            ),
+                          SizedBox(height: showBack ? 0 : 20),
+                          Text(
+                            showBack ? word.translationGr : word.word,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Color(0xFF173A8A),
+                              fontSize: 36,
+                              fontWeight: FontWeight.w900,
+                              height: 1.08,
+                            ),
+                          ),
+                          if (word.partOfSpeech != null) ...[
+                            const SizedBox(height: 10),
+                            Text(
+                              word.partOfSpeech!,
+                              style: const TextStyle(
+                                color: Color(0xFF6B6B78),
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: 22),
+                          Text(
+                            showBack
+                                ? 'Πάτησε για τη λέξη • Σύρε για επόμενη'
+                                : 'Πάτησε για μετάφραση • Σύρε για επόμενη',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Color(0xFF77718F),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          FilledButton.icon(
+                            onPressed: onLearned,
+                            icon: const Icon(Icons.task_alt_rounded),
+                            label: const Text('Την έμαθα'),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: const Color(0xFFDDF5E5),
+                              foregroundColor: const Color(0xFF24734A),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 22,
+                                vertical: 12,
+                              ),
+                              elevation: 0,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                                side: const BorderSide(
+                                  color: Color(0xFFB9E5C8),
+                                ),
+                              ),
+                              textStyle: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }

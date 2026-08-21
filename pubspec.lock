@@ -230,6 +230,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "7.2.0"
+  flutter_confetti:
+    dependency: "direct main"
+    description:
+      name: flutter_confetti
+      sha256: "8a1b89b73398453b0a8216f0af3bf2a25ea7ce14234fbf47011061e889fca85b"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.5.2"
   flutter_launcher_icons:
     dependency: "direct dev"
     description:

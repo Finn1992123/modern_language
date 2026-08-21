@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'games.dart';
+import 'join_room_page.dart';
 import 'myachievements.dart';
 import 'myexercises.dart';
 import 'mygrades.dart';
@@ -200,7 +201,10 @@ class _GradeBreakdownCard extends StatelessWidget {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (context) => MyAchievementsPage(
+          studentId: studentId,
+          classId: breakdown.classId,
           languageLabel: _languageLabel(breakdown.language),
+          showJuniorAchievements: breakdown.supportsJuniorAchievements,
         ),
       ),
     );
@@ -226,6 +230,15 @@ class _GradeBreakdownCard extends StatelessWidget {
           classId: breakdown.classId,
           languageLabel: _languageLabel(breakdown.language),
         ),
+      ),
+    );
+  }
+
+  void _openJoinRoom(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) =>
+            JoinRoomPage(studentId: studentId, classId: breakdown.classId),
       ),
     );
   }
@@ -302,6 +315,7 @@ class _GradeBreakdownCard extends StatelessWidget {
             onHomeworkTap: () => _openMyHomework(context),
             onAchievementsTap: () => _openMyAchievements(context),
             onExercisesTap: () => _openMyExercises(context),
+            onJoinRoomTap: () => _openJoinRoom(context),
             onGamesTap: () => _openGames(context),
           ),
         ],
@@ -318,6 +332,7 @@ class _LessonActionGrid extends StatelessWidget {
     required this.onHomeworkTap,
     required this.onAchievementsTap,
     required this.onExercisesTap,
+    required this.onJoinRoomTap,
     required this.onGamesTap,
   });
 
@@ -327,6 +342,7 @@ class _LessonActionGrid extends StatelessWidget {
   final VoidCallback onHomeworkTap;
   final VoidCallback onAchievementsTap;
   final Future<void> Function() onExercisesTap;
+  final VoidCallback onJoinRoomTap;
   final VoidCallback onGamesTap;
 
   @override
@@ -369,6 +385,14 @@ class _LessonActionGrid extends StatelessWidget {
               onTap: onExercisesTap,
             ),
           ],
+        ),
+        const SizedBox(height: 10),
+        _LessonActionButton(
+          label: 'Συμμετοχή σε δωμάτιο',
+          icon: Icons.meeting_room_rounded,
+          backgroundColor: const Color(0xFF18A8EF),
+          foregroundColor: Colors.white,
+          onTap: onJoinRoomTap,
         ),
         const SizedBox(height: 10),
         _LessonActionButton(
@@ -693,6 +717,7 @@ class _InfoPanel extends StatelessWidget {
 class _ClassGradeBreakdown {
   const _ClassGradeBreakdown({
     required this.classId,
+    required this.className,
     required this.language,
     required this.daysHours,
     required this.reading,
@@ -708,11 +733,13 @@ class _ClassGradeBreakdown {
 
   factory _ClassGradeBreakdown.fromRow(Map<String, dynamic> row) {
     final classId = row['class_id'];
+    final className = row['class_name'];
     final language = row['language'];
     final daysHours = row['days_hours'];
 
     return _ClassGradeBreakdown(
       classId: classId is String ? classId : '',
+      className: className is String ? className.trim() : '',
       language: language is String ? language.trim().toLowerCase() : '',
       daysHours: daysHours is String && daysHours.trim().isNotEmpty
           ? daysHours.trim()
@@ -730,6 +757,7 @@ class _ClassGradeBreakdown {
   }
 
   final String classId;
+  final String className;
   final String language;
   final String? daysHours;
   final double? reading;
@@ -741,6 +769,9 @@ class _ClassGradeBreakdown {
   final double? homework;
   final double? effort;
   final double? overall;
+
+  bool get supportsJuniorAchievements =>
+      RegExp(r'^(JA|JB|SA|SB)').hasMatch(className.trim().toUpperCase());
 
   List<_GradeItem> get items => [
     _GradeItem('Reading', reading),

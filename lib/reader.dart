@@ -215,6 +215,7 @@ class _ReaderPageState extends State<ReaderPage> {
     try {
       final passed = await session.saveProgress(
         progress: _completedPassages + 1,
+        scorePercentage: ((_completedPassages + 1) / session.targetValue) * 100,
         finishAttempt: false,
         sourceKey: passage.id,
       );
@@ -640,6 +641,17 @@ class _ReaderPageState extends State<ReaderPage> {
                   fontWeight: FontWeight.w900,
                 ),
               ),
+              if (assignmentFinished) ...[
+                const SizedBox(height: 10),
+                const Text(
+                  'Βαθμός: 100%',
+                  style: TextStyle(
+                    color: Color(0xFF178A45),
+                    fontSize: 22,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
               const SizedBox(height: 18),
             ],
             if (!assignmentFinished) ...[

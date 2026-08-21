@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 
 import 'studentscurriculum.dart';
+import 'teacher_achievements_page.dart';
 import 'teacher_classes_page.dart';
+import 'teacher_dictation_page.dart';
 import 'teacher_exercises_page.dart';
+import 'teacher_exercise_results_page.dart';
 import 'teacher_payments.dart';
 
 class TeachersMenuPage extends StatelessWidget {
@@ -60,6 +63,13 @@ class TeachersMenuPage extends StatelessWidget {
               color: const Color(0xFF627DE4),
               onTap: () => _openPage(context, const TeacherClassesPage()),
             ),
+            const SizedBox(height: 12),
+            _TeacherMenuButton(
+              label: 'Απονομή επιτευγμάτων',
+              icon: Icons.workspace_premium_rounded,
+              color: const Color(0xFFCFB010),
+              onTap: () => _openPage(context, const TeacherAchievementsPage()),
+            ),
             if (role == 'headteacher') ...[
               const SizedBox(height: 12),
               _TeacherMenuButton(
@@ -75,6 +85,21 @@ class TeachersMenuPage extends StatelessWidget {
               icon: Icons.edit_note_rounded,
               color: const Color(0xFF18A8EF),
               onTap: () => _openPage(context, const TeacherExercisesPage()),
+            ),
+            const SizedBox(height: 12),
+            _TeacherMenuButton(
+              label: 'Έλεγχος ασκήσεων',
+              icon: Icons.fact_check_rounded,
+              color: const Color(0xFF178A45),
+              onTap: () =>
+                  _openPage(context, const TeacherExerciseResultsPage()),
+            ),
+            const SizedBox(height: 12),
+            _TeacherMenuButton(
+              label: 'Δημιουργία ορθογραφίας',
+              icon: Icons.spellcheck_rounded,
+              color: const Color(0xFF4D4AAD),
+              onTap: () => _openPage(context, const TeacherDictationPage()),
             ),
             const SizedBox(height: 12),
             _TeacherMenuButton(
