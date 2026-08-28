@@ -467,5 +467,9 @@ String _readText(Object? value) {
     return value.trim();
   }
 
+  if (value is num) {
+    return value.toString();
+  }
+
   return '';
 }

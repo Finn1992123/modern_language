@@ -40,6 +40,10 @@ dependencies:
   speech_to_text: ^7.4.0
   flutter_card_swiper: ^7.2.0
   flutter_confetti: ^0.5.1
+  firebase_core: ^4.13.0
+  firebase_messaging: ^16.5.0
+  flutter_local_notifications: ^20.1.0
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   flutter_test:
@@ -56,13 +60,13 @@ dev_dependencies:
 
 flutter_native_splash:
   color: "#F8FBFF"
-  image: lib/img/logoTransp.png
+  image: store_assets/legacy_android_splash.png
   android: true
   ios: true
   web: false
   android_12:
     color: "#F8FBFF"
-    image: store_assets/modern_language_play_icon_mark_512.png
+    image: store_assets/android12_splash.png
 
 flutter_launcher_icons:
   android: true

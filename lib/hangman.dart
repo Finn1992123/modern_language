@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'assignment_session.dart';
@@ -9,25 +10,20 @@ import 'assignment_word_preview.dart';
 
 enum HangmanMode { solo, versus }
 
-class _LevelOption {
-  const _LevelOption(this.label, this.databaseLevel);
-
-  final String label;
-  final String databaseLevel;
+String _hangmanTtsLanguage(String language) {
+  switch (language.trim().toLowerCase()) {
+    case 'english':
+      return 'en-US';
+    case 'spanish':
+      return 'es-ES';
+    case 'french':
+      return 'fr-FR';
+    case 'german':
+      return 'de-DE';
+    default:
+      return 'en-US';
+  }
 }
-
-const _levelOptions = <_LevelOption>[
-  _LevelOption('Junior A', 'Pre-A1'),
-  _LevelOption('Junior B', 'A1'),
-  _LevelOption('Senior A', 'A1'),
-  _LevelOption('Senior B', 'A2'),
-  _LevelOption('Senior C', 'A2'),
-  _LevelOption('Senior D', 'B1'),
-  _LevelOption('Pre-Lower', 'B1+'),
-  _LevelOption('Lower', 'B2'),
-  _LevelOption('Advanced', 'C1'),
-  _LevelOption('Proficiency', 'C2'),
-];
 
 class HangmanHomePage extends StatefulWidget {
   const HangmanHomePage({
@@ -48,8 +44,9 @@ class HangmanHomePage extends StatefulWidget {
 }
 
 class _HangmanHomePageState extends State<HangmanHomePage> {
-  _LevelOption? _selectedLevel;
+  final Set<String> _selectedChapterKeys = {};
   late final Future<List<AssignmentPreviewWord>>? _assignmentWordsFuture;
+  late final Future<List<_HangmanChapter>>? _chaptersFuture;
   bool _startingAssignment = false;
 
   @override
@@ -58,6 +55,43 @@ class _HangmanHomePageState extends State<HangmanHomePage> {
     _assignmentWordsFuture = widget.assignmentSession == null
         ? null
         : _loadAssignmentWords(widget.assignmentSession!);
+    _chaptersFuture = widget.assignmentSession == null ? _loadChapters() : null;
+  }
+
+  Future<List<_HangmanChapter>> _loadChapters() async {
+    final rows = await Supabase.instance.client.rpc(
+      'get_student_study_vocabulary',
+      params: {
+        'input_student_id': widget.studentId,
+        'input_class_id': widget.classId,
+      },
+    );
+    if (rows is! List) return const [];
+
+    final chapters = <String, _HangmanChapter>{};
+    for (final value in rows) {
+      if (value is! Map) continue;
+      final row = Map<String, dynamic>.from(value);
+      final word = row['word']?.toString().trim().toUpperCase() ?? '';
+      final unit = row['unit']?.toString().trim() ?? '';
+      final unitOrder = (row['unit_order'] as num?)?.toInt();
+      final characters = word.split('');
+      final isPlayable =
+          characters.where(_isHangmanLetter).length >= 2 &&
+          characters.every(_isHangmanCharacter);
+      if (unit.isEmpty || !isPlayable) continue;
+      final key = '${unitOrder ?? 999999}::$unit';
+      chapters.putIfAbsent(
+        key,
+        () => _HangmanChapter(key: key, label: unit, order: unitOrder),
+      );
+    }
+    return chapters.values.toList()..sort((a, b) {
+      final orderComparison = (a.order ?? 999999).compareTo(b.order ?? 999999);
+      return orderComparison != 0
+          ? orderComparison
+          : a.label.compareTo(b.label);
+    });
   }
 
   Future<List<AssignmentPreviewWord>> _loadAssignmentWords(
@@ -133,15 +167,16 @@ class _HangmanHomePageState extends State<HangmanHomePage> {
     if (session == null || _startingAssignment) return;
     setState(() => _startingAssignment = true);
     final level = session.settings['level']?.toString() ?? '';
+    final unitLabel = session.settings['unit']?.toString().trim() ?? '';
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (context) => _HangmanGamePage(
-          level: _LevelOption(level, level),
+          selectionLabel: unitLabel.isEmpty ? level : unitLabel,
           mode: HangmanMode.solo,
           languageLabel: widget.languageLabel,
           studentId: widget.studentId,
           classId: widget.classId,
-          unit: session.settings['unit']?.toString(),
+          selectedChapterKeys: const {},
           assignmentSession: session,
           assignmentWords: words,
         ),
@@ -151,10 +186,9 @@ class _HangmanHomePageState extends State<HangmanHomePage> {
   }
 
   void _start(HangmanMode mode) {
-    final level = _selectedLevel;
-    if (level == null) {
+    if (_selectedChapterKeys.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Επίλεξε πρώτα ένα επίπεδο.')),
+        const SnackBar(content: Text('Επίλεξε τουλάχιστον ένα κεφάλαιο.')),
       );
       return;
     }
@@ -162,12 +196,14 @@ class _HangmanHomePageState extends State<HangmanHomePage> {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (context) => _HangmanGamePage(
-          level: level,
+          selectionLabel: _selectedChapterKeys.length == 1
+              ? '1 κεφάλαιο'
+              : '${_selectedChapterKeys.length} κεφάλαια',
           mode: mode,
           languageLabel: widget.languageLabel,
           studentId: widget.studentId,
           classId: widget.classId,
-          unit: null,
+          selectedChapterKeys: Set.unmodifiable(_selectedChapterKeys),
           assignmentSession: null,
           assignmentWords: null,
         ),
@@ -295,7 +331,7 @@ class _HangmanHomePageState extends State<HangmanHomePage> {
             ),
             const SizedBox(height: 28),
             const Text(
-              'Επίπεδο',
+              'Κεφάλαια βιβλίου',
               style: TextStyle(
                 color: Color(0xFF29265F),
                 fontSize: 23,
@@ -303,34 +339,56 @@ class _HangmanHomePageState extends State<HangmanHomePage> {
               ),
             ),
             const SizedBox(height: 12),
-            Wrap(
-              spacing: 9,
-              runSpacing: 9,
-              children: [
-                for (final level in _levelOptions)
-                  ChoiceChip(
-                    label: Text(level.label),
-                    selected: identical(_selectedLevel, level),
-                    onSelected: (_) => setState(() => _selectedLevel = level),
-                    selectedColor: const Color(0xFF4D4AAD),
-                    backgroundColor: Colors.white,
-                    side: BorderSide(
-                      color: identical(_selectedLevel, level)
-                          ? const Color(0xFF4D4AAD)
-                          : const Color(0xFFD9D7F2),
-                    ),
-                    labelStyle: TextStyle(
-                      color: identical(_selectedLevel, level)
-                          ? Colors.white
-                          : const Color(0xFF4D4AAD),
-                      fontWeight: FontWeight.w800,
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 8,
-                    ),
-                  ),
-              ],
+            FutureBuilder<List<_HangmanChapter>>(
+              future: _chaptersFuture,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (snapshot.hasError) {
+                  return const Text(
+                    'Δεν μπορέσαμε να φορτώσουμε τα κεφάλαια του βιβλίου.',
+                  );
+                }
+                final chapters = snapshot.data ?? const [];
+                if (chapters.isEmpty) {
+                  return const Text(
+                    'Δεν υπάρχουν διαθέσιμες λέξεις στο βιβλίο σου.',
+                  );
+                }
+                return Wrap(
+                  spacing: 9,
+                  runSpacing: 9,
+                  children: [
+                    for (final chapter in chapters)
+                      FilterChip(
+                        label: Text(chapter.label),
+                        selected: _selectedChapterKeys.contains(chapter.key),
+                        onSelected: (_) {
+                          setState(() {
+                            if (!_selectedChapterKeys.add(chapter.key)) {
+                              _selectedChapterKeys.remove(chapter.key);
+                            }
+                          });
+                        },
+                        selectedColor: const Color(0xFF4D4AAD),
+                        backgroundColor: Colors.white,
+                        checkmarkColor: Colors.white,
+                        side: BorderSide(
+                          color: _selectedChapterKeys.contains(chapter.key)
+                              ? const Color(0xFF4D4AAD)
+                              : const Color(0xFFD9D7F2),
+                        ),
+                        labelStyle: TextStyle(
+                          color: _selectedChapterKeys.contains(chapter.key)
+                              ? Colors.white
+                              : const Color(0xFF4D4AAD),
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                  ],
+                );
+              },
             ),
             const SizedBox(height: 28),
             _ModeButton(
@@ -352,6 +410,24 @@ class _HangmanHomePageState extends State<HangmanHomePage> {
     );
   }
 }
+
+class _HangmanChapter {
+  const _HangmanChapter({
+    required this.key,
+    required this.label,
+    required this.order,
+  });
+
+  final String key;
+  final String label;
+  final int? order;
+}
+
+bool _isHangmanLetter(String character) =>
+    RegExp(r'^[A-Z]$').hasMatch(character);
+
+bool _isHangmanCharacter(String character) =>
+    _isHangmanLetter(character) || " -'".contains(character);
 
 class _ModeButton extends StatelessWidget {
   const _ModeButton({
@@ -384,22 +460,22 @@ class _ModeButton extends StatelessWidget {
 
 class _HangmanGamePage extends StatefulWidget {
   const _HangmanGamePage({
-    required this.level,
+    required this.selectionLabel,
     required this.mode,
     required this.languageLabel,
     required this.studentId,
     required this.classId,
-    required this.unit,
+    required this.selectedChapterKeys,
     required this.assignmentSession,
     required this.assignmentWords,
   });
 
-  final _LevelOption level;
+  final String selectionLabel;
   final HangmanMode mode;
   final String languageLabel;
   final String studentId;
   final String classId;
-  final String? unit;
+  final Set<String> selectedChapterKeys;
   final AssignmentSession? assignmentSession;
   final List<AssignmentPreviewWord>? assignmentWords;
 
@@ -410,6 +486,7 @@ class _HangmanGamePage extends StatefulWidget {
 class _HangmanGamePageState extends State<_HangmanGamePage> {
   static const _alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   final _random = Random();
+  final FlutterTts _tts = FlutterTts();
 
   late Future<List<AssignmentPreviewWord>> _wordsFuture = _loadWords();
   List<AssignmentPreviewWord> _words = const [];
@@ -424,6 +501,8 @@ class _HangmanGamePageState extends State<_HangmanGamePage> {
   bool _changingWord = false;
   bool _gameFinished = false;
   Timer? _nextWordTimer;
+  Future<void>? _ttsReady;
+  int _ttsRequestId = 0;
   late int _assignmentProgress = widget.assignmentSession?.progressValue ?? 0;
 
   String get _currentWord => _words[_wordIndex].word;
@@ -431,7 +510,56 @@ class _HangmanGamePageState extends State<_HangmanGamePage> {
   @override
   void dispose() {
     _nextWordTimer?.cancel();
+    _ttsRequestId++;
+    _tts.stop();
     super.dispose();
+  }
+
+  Future<void> _initializeTts() async {
+    await _tts.awaitSpeakCompletion(true);
+    await _tts.setSpeechRate(0.42);
+    await _tts.setPitch(1);
+  }
+
+  Future<void> _speakSequence(List<String> texts) async {
+    final requestId = ++_ttsRequestId;
+    try {
+      await (_ttsReady ??= _initializeTts()).timeout(
+        const Duration(seconds: 6),
+      );
+      if (!mounted || requestId != _ttsRequestId) return;
+
+      final languageResult = await _tts
+          .setLanguage(_hangmanTtsLanguage(widget.languageLabel))
+          .timeout(const Duration(seconds: 6));
+      if (languageResult != 1) {
+        throw StateError('TTS language is not installed');
+      }
+      if (!mounted || requestId != _ttsRequestId) return;
+
+      await _tts.stop();
+      for (var index = 0; index < texts.length; index++) {
+        if (!mounted || requestId != _ttsRequestId) return;
+        final speakResult = await _tts
+            .speak(texts[index], focus: true)
+            .timeout(const Duration(seconds: 8));
+        if (speakResult != 1) {
+          throw StateError('TTS engine did not start');
+        }
+        if (index < texts.length - 1) {
+          await Future<void>.delayed(const Duration(milliseconds: 180));
+        }
+      }
+    } catch (_) {
+      _ttsReady = null;
+      if (!mounted || requestId != _ttsRequestId) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Δεν είναι διαθέσιμη η εκφώνηση σε αυτή τη συσκευή.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   Future<List<AssignmentPreviewWord>> _loadWords() async {
@@ -475,8 +603,10 @@ class _HangmanGamePageState extends State<_HangmanGamePage> {
       final row = Map<String, dynamic>.from(value);
       final word = row['word']?.toString().trim().toUpperCase() ?? '';
       final language = row['language']?.toString().trim() ?? '';
-      final level = row['level']?.toString().trim() ?? '';
-      if (level != widget.level.databaseLevel) continue;
+      final unit = row['unit']?.toString().trim() ?? '';
+      final unitOrder = (row['unit_order'] as num?)?.toInt();
+      final unitKey = '${unitOrder ?? 999999}::$unit';
+      if (!widget.selectedChapterKeys.contains(unitKey)) continue;
       if (widget.languageLabel.trim().isNotEmpty &&
           language.toLowerCase() != widget.languageLabel.trim().toLowerCase()) {
         continue;
@@ -556,9 +686,12 @@ class _HangmanGamePageState extends State<_HangmanGamePage> {
     });
 
     if (_mistakes >= 6) {
+      unawaited(_speakSequence([letter]));
       _finishGame();
     } else if (_wordSolved) {
-      _completeWord();
+      _completeWord(lastLetter: letter);
+    } else {
+      unawaited(_speakSequence([letter]));
     }
   }
 
@@ -572,8 +705,9 @@ class _HangmanGamePageState extends State<_HangmanGamePage> {
     return true;
   }
 
-  void _completeWord() {
+  void _completeWord({required String lastLetter}) {
     final completedWord = _currentWord;
+    unawaited(_speakSequence([lastLetter, completedWord]));
     setState(() {
       _changingWord = true;
       if (widget.mode == HangmanMode.solo) {
@@ -798,7 +932,7 @@ class _HangmanGamePageState extends State<_HangmanGamePage> {
         backgroundColor: Colors.transparent,
         surfaceTintColor: Colors.transparent,
         title: Text(
-          widget.level.label,
+          widget.selectionLabel,
           style: const TextStyle(fontWeight: FontWeight.w900),
         ),
         centerTitle: true,
@@ -819,7 +953,7 @@ class _HangmanGamePageState extends State<_HangmanGamePage> {
           if (words.isEmpty) {
             return _LoadProblem(
               message:
-                  'Δεν βρέθηκαν ενεργές λέξεις για ${widget.level.databaseLevel}.',
+                  'Δεν βρέθηκαν ενεργές λέξεις για τα κεφάλαια που επέλεξες.',
               onRetry: _retryLoading,
             );
           }

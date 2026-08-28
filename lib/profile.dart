@@ -5,7 +5,9 @@ import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'account_deletion_request.dart';
+import 'notification_settings_page.dart';
 import 'personal_details.dart';
+import 'push_notification_service.dart';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -63,6 +65,7 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _signOut() async {
+    await PushNotificationService.unregisterCurrentDevice();
     await Supabase.instance.client.auth.signOut();
     if (mounted) {
       Navigator.of(context).popUntil((route) => route.isFirst);
@@ -277,6 +280,14 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
+  void _openNotificationSettings() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => const NotificationSettingsPage(),
+      ),
+    );
+  }
+
   void _showMessage(String message) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
@@ -434,8 +445,7 @@ class _ProfilePageState extends State<ProfilePage> {
                   _ProfileActionButton(
                     icon: Icons.notifications_rounded,
                     label: 'Ειδοποιήσεις',
-                    onPressed: () =>
-                        _showMessage('Οι ειδοποιήσεις θα συνδεθούν σύντομα.'),
+                    onPressed: _openNotificationSettings,
                   ),
                   const SizedBox(height: 12),
                   _ProfileActionButton(
@@ -546,11 +556,7 @@ class ProfilePhotoButton extends StatelessWidget {
 }
 
 class CrownedProfilePhoto extends StatelessWidget {
-  const CrownedProfilePhoto({
-    super.key,
-    this.imageUrl,
-    this.crownTop = 0,
-  });
+  const CrownedProfilePhoto({super.key, this.imageUrl, this.crownTop = 0});
 
   final String? imageUrl;
   final double crownTop;
@@ -564,10 +570,7 @@ class CrownedProfilePhoto extends StatelessWidget {
         clipBehavior: Clip.none,
         alignment: Alignment.bottomCenter,
         children: [
-          ProfilePhotoButton(
-            imageUrl: imageUrl,
-            size: 130,
-          ),
+          ProfilePhotoButton(imageUrl: imageUrl, size: 130),
           Positioned(
             top: crownTop,
             right: 22,
@@ -668,7 +671,11 @@ class _ProfileData {
 }
 
 class _ProfileStudent {
-  const _ProfileStudent({required this.id, required this.name, this.profilePic});
+  const _ProfileStudent({
+    required this.id,
+    required this.name,
+    this.profilePic,
+  });
 
   factory _ProfileStudent.fromRow(Map<String, dynamic> row) {
     return _ProfileStudent(

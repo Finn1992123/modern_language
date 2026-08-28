@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "20049940941",
+    "project_id": "modern-language-a3787",
+    "storage_bucket": "modern-language-a3787.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:20049940941:android:3c9eae35e309605f0d3484",
+        "android_client_info": {
+          "package_name": "gr.modernlanguage.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAcQ6O4mXv5CF6_kuLEX_YorD3tmbxl5Dw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

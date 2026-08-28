@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'studentscurriculum.dart';
 import 'teacher_achievements_page.dart';
+import 'teacher_announcements_page.dart';
 import 'teacher_classes_page.dart';
 import 'teacher_dictation_page.dart';
 import 'teacher_exercises_page.dart';
@@ -63,6 +64,16 @@ class TeachersMenuPage extends StatelessWidget {
               color: const Color(0xFF627DE4),
               onTap: () => _openPage(context, const TeacherClassesPage()),
             ),
+            if (role == 'headteacher') ...[
+              const SizedBox(height: 12),
+              _TeacherMenuButton(
+                label: 'Νέα ανακοίνωση',
+                icon: Icons.campaign_rounded,
+                color: const Color(0xFF2D7D10),
+                onTap: () =>
+                    _openPage(context, TeacherAnnouncementsPage(role: role)),
+              ),
+            ],
             const SizedBox(height: 12),
             _TeacherMenuButton(
               label: 'Απονομή επιτευγμάτων',
@@ -73,8 +84,8 @@ class TeachersMenuPage extends StatelessWidget {
             if (role == 'headteacher') ...[
               const SizedBox(height: 12),
               _TeacherMenuButton(
-                label: 'Πληρωμές',
-                icon: Icons.savings_rounded,
+                label: 'Οικονομικά',
+                icon: Icons.account_balance_wallet_rounded,
                 color: const Color(0xFFDB9538),
                 onTap: () => _openPage(context, const TeacherPaymentsPage()),
               ),

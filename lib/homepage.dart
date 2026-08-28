@@ -630,10 +630,13 @@ class _StudentData {
     final id = row['id'];
     final name = row['name'];
     final gender = row['gender'];
+    final normalizedName = name is String ? name.trim() : '';
 
     return _StudentData(
       id: id is String ? id : '',
-      name: name is String && name.trim().isNotEmpty ? name.trim() : 'μαθητή',
+      name: normalizedName.isNotEmpty
+          ? normalizedName.split(RegExp(r'\s+')).first
+          : 'μαθητή',
       gender: gender is String ? gender.trim().toLowerCase() : 'm',
       profilePic: _readOptionalText(row['profile_pic']),
     );

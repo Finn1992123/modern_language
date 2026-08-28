@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class AnnouncementsPage extends StatefulWidget {
-  const AnnouncementsPage({super.key});
+  const AnnouncementsPage({super.key, this.initialNotificationId});
+
+  final String? initialNotificationId;
 
   @override
   State<AnnouncementsPage> createState() => _AnnouncementsPageState();
@@ -11,19 +13,24 @@ class AnnouncementsPage extends StatefulWidget {
 class _AnnouncementsPageState extends State<AnnouncementsPage> {
   late final Future<List<_Announcement>> _announcementsFuture =
       _loadAnnouncements();
+  bool _didOpenInitialAnnouncement = false;
 
   static const Color _headerColor = Color(0x9682FE63);
   static const Color _contentColor = Color(0xFF2D7D10);
 
   Future<List<_Announcement>> _loadAnnouncements() async {
-    final rows = await Supabase.instance.client
-        .from('announcements')
-        .select('created_at, header, text')
-        .order('created_at', ascending: false);
+    final rows = await Supabase.instance.client.rpc(
+      'get_visible_announcements',
+    );
 
-    return rows
-        .map((row) => _Announcement.fromRow(Map<String, dynamic>.from(row)))
-        .toList();
+    return rows is List
+        ? rows
+              .whereType<Map>()
+              .map(
+                (row) => _Announcement.fromRow(Map<String, dynamic>.from(row)),
+              )
+              .toList()
+        : const [];
   }
 
   void _showAnnouncementDialog(_Announcement announcement) {
@@ -223,6 +230,20 @@ class _AnnouncementsPageState extends State<AnnouncementsPage> {
 
                 final announcements = snapshot.data ?? const [];
 
+                if (!_didOpenInitialAnnouncement &&
+                    widget.initialNotificationId != null &&
+                    announcements.isNotEmpty) {
+                  _didOpenInitialAnnouncement = true;
+                  final initialAnnouncement = announcements
+                      .where((item) => item.id == widget.initialNotificationId)
+                      .firstOrNull;
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted && initialAnnouncement != null) {
+                      _showAnnouncementDialog(initialAnnouncement);
+                    }
+                  });
+                }
+
                 if (announcements.isEmpty) {
                   return Center(
                     child: Text(
@@ -261,22 +282,28 @@ class _AnnouncementsPageState extends State<AnnouncementsPage> {
 
 class _Announcement {
   const _Announcement({
+    required this.id,
     required this.createdAt,
     required this.header,
     required this.text,
+    required this.className,
   });
 
   factory _Announcement.fromRow(Map<String, dynamic> row) {
     return _Announcement(
+      id: _readText(row['notification_id']),
       createdAt: _readDate(row['created_at']),
       header: _readText(row['header'], fallback: 'Ανακοίνωση'),
       text: _readText(row['text']),
+      className: _readText(row['class_name']),
     );
   }
 
+  final String id;
   final DateTime? createdAt;
   final String header;
   final String text;
+  final String className;
 
   String get formattedDate {
     final date = createdAt;
@@ -312,10 +339,7 @@ class _Announcement {
 }
 
 class _AnnouncementCard extends StatelessWidget {
-  const _AnnouncementCard({
-    required this.announcement,
-    required this.onTap,
-  });
+  const _AnnouncementCard({required this.announcement, required this.onTap});
 
   final _Announcement announcement;
   final VoidCallback onTap;
@@ -405,6 +429,27 @@ class _AnnouncementCard extends StatelessWidget {
                             fontSize: 12,
                             fontWeight: FontWeight.w800,
                             height: 1,
+                          ),
+                        ),
+                      ),
+                    ],
+                    if (announcement.className.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFEAFBE5),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          announcement.className,
+                          style: const TextStyle(
+                            color: _AnnouncementsPageState._contentColor,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
                           ),
                         ),
                       ),

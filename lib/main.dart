@@ -3,9 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'app_navigation.dart';
 import 'connect_code_page.dart';
 import 'homepage.dart';
 import 'login.dart';
+import 'push_notification_service.dart';
 
 const supabaseUrl = 'https://vjgvvcjtrptkgiyowuvx.supabase.co';
 const supabaseAnonKey =
@@ -18,7 +20,11 @@ Future<void> main() async {
     await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
   }
 
+  await PushNotificationService.initialize();
   runApp(const MyApp());
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    PushNotificationService.openPendingNotification();
+  });
 }
 
 class MyApp extends StatelessWidget {
@@ -27,6 +33,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: rootNavigatorKey,
       title: 'Modern Language',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(

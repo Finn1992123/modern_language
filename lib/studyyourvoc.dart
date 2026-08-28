@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_card_swiper/flutter_card_swiper.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:speech_to_text/speech_recognition_error.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -39,7 +40,7 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
   final Random _random = Random();
 
   _VocMode? _mode;
-  String? _selectedUnit;
+  final Set<String> _selectedUnits = {};
   int _wordIndex = 0;
   bool _isFlipped = false;
   bool? _lastAnswerCorrect;
@@ -47,6 +48,7 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
   String? _selectedChoice;
   bool _speechReady = false;
   bool _isListening = false;
+  bool _speechListeningStarted = false;
   bool _speechResultHandled = false;
   int _speechSessionId = 0;
   int _ttsSessionId = 0;
@@ -71,11 +73,11 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
     final session = widget.assignmentSession;
     if (session == null) return;
     if (_usesPersonalWords) {
-      _selectedUnit = 'personal';
+      _selectedUnits.add('personal');
     } else {
       final unit = session.settings['unit']?.toString() ?? '';
       final order = (session.settings['unit_order'] as num?)?.toInt();
-      _selectedUnit = '${order ?? 999999}::$unit';
+      _selectedUnits.add('${order ?? 999999}::$unit');
     }
     _importantOnly = session.settings['important_only'] == true;
     _mode = switch (session.settings['mode']?.toString()) {
@@ -128,9 +130,11 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
         .toList();
   }
 
-  void _selectUnit(String? unit) {
+  void _toggleUnit(String unit) {
     setState(() {
-      _selectedUnit = unit;
+      if (!_selectedUnits.add(unit)) {
+        _selectedUnits.remove(unit);
+      }
       _unitValidationError = false;
       _wordIndex = 0;
       _attempts.clear();
@@ -139,7 +143,7 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
   }
 
   void _selectMode(_VocMode? mode) {
-    if (mode != null && _selectedUnit == null) {
+    if (mode != null && _selectedUnits.isEmpty) {
       setState(() => _unitValidationError = true);
       return;
     }
@@ -167,6 +171,7 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
     _selectedChoice = null;
     _multipleChoices = const [];
     _isListening = false;
+    _speechListeningStarted = false;
     _speechResultHandled = false;
     _spokenText = '';
     _answerController.clear();
@@ -232,18 +237,32 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
   }
 
   Future<void> _toggleListening(_VocWord word) async {
-    if (_isListening) {
+    if (_isListening || _speech.isListening) {
       _speechSessionId++;
-      await _speech.stop();
+      await _speech.cancel();
       if (!mounted) {
         return;
       }
-      setState(() => _isListening = false);
+      setState(() {
+        _isListening = false;
+        _speechListeningStarted = false;
+      });
       return;
     }
 
     final sessionId = ++_speechSessionId;
-    final ready = _speechReady || await _speech.initialize();
+    if (_speechReady) {
+      await _speech.cancel();
+      if (!mounted || sessionId != _speechSessionId) {
+        return;
+      }
+    }
+    final ready =
+        _speechReady ||
+        await _speech.initialize(
+          onStatus: _handleSpeechStatus,
+          onError: _handleSpeechError,
+        );
     if (!mounted || sessionId != _speechSessionId) {
       return;
     }
@@ -260,10 +279,12 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
     final language = word.language.isEmpty
         ? widget.languageLabel
         : word.language;
+    final listenDuration = _speakingListenDuration(word.word);
 
     setState(() {
       _speechReady = true;
       _isListening = true;
+      _speechListeningStarted = false;
       _speechResultHandled = false;
       if (_lastAnswerCorrect != false) {
         _lastAnswerCorrect = null;
@@ -271,62 +292,151 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
       _spokenText = '';
     });
 
-    await _speech.listen(
-      listenOptions: stt.SpeechListenOptions(
-        localeId: _speechLanguage(language),
-        listenFor: const Duration(seconds: 4),
-        pauseFor: const Duration(seconds: 2),
-        partialResults: true,
-      ),
-      onResult: (result) {
-        if (!mounted || sessionId != _speechSessionId) {
-          return;
-        }
+    try {
+      await _speech.listen(
+        listenOptions: stt.SpeechListenOptions(
+          localeId: _speechLanguage(language),
+          listenFor: listenDuration,
+          pauseFor: const Duration(seconds: 4),
+          partialResults: true,
+          cancelOnError: true,
+          listenMode: _normalizeAnswer(word.word).contains(' ')
+              ? stt.ListenMode.confirmation
+              : stt.ListenMode.search,
+        ),
+        onResult: (result) {
+          if (!mounted || sessionId != _speechSessionId) {
+            return;
+          }
 
-        final recognized = result.recognizedWords;
-        final isCorrect = _exactAnswerMatch(recognized, word.word);
+          var recognized = result.recognizedWords;
+          var isCorrect = false;
+          for (final alternate in result.alternates) {
+            if (_spokenAnswerMatch(alternate.recognizedWords, word.word)) {
+              recognized = alternate.recognizedWords;
+              isCorrect = true;
+              break;
+            }
+          }
 
-        if (_speechResultHandled) {
-          setState(() => _spokenText = recognized);
-          return;
-        }
+          if (_speechResultHandled) {
+            setState(() => _spokenText = recognized);
+            return;
+          }
 
-        if (isCorrect) {
-          _speechResultHandled = true;
-          _speech.stop();
+          if (isCorrect) {
+            _speechResultHandled = true;
+            setState(() {
+              _spokenText = recognized;
+              _isListening = false;
+              _speechListeningStarted = false;
+              _lastAnswerCorrect = true;
+              _recordFirstSpeakingAttempt(
+                word: word,
+                userAnswer: recognized,
+                correct: true,
+              );
+            });
+            unawaited(_closeMicrophoneAndSpeak(word, sessionId));
+            return;
+          }
+
           setState(() {
             _spokenText = recognized;
-            _isListening = false;
-            _lastAnswerCorrect = true;
-            _recordFirstSpeakingAttempt(
-              word: word,
-              userAnswer: recognized,
-              correct: true,
-            );
+            if (result.finalResult) {
+              _speechResultHandled = true;
+              _isListening = false;
+              _speechListeningStarted = false;
+              _lastAnswerCorrect = false;
+              _recordFirstSpeakingAttempt(
+                word: word,
+                userAnswer: recognized,
+                correct: false,
+              );
+            }
           });
-          _speak(word);
-          return;
-        }
 
-        setState(() {
-          _spokenText = recognized;
           if (result.finalResult) {
-            _speechResultHandled = true;
-            _isListening = false;
-            _lastAnswerCorrect = false;
-            _recordFirstSpeakingAttempt(
-              word: word,
-              userAnswer: recognized,
-              correct: false,
-            );
+            unawaited(_closeMicrophoneAndSpeak(word, sessionId));
           }
-        });
+        },
+      );
+    } catch (_) {
+      await _speech.cancel();
+      if (!mounted || sessionId != _speechSessionId) {
+        return;
+      }
+      setState(() {
+        _isListening = false;
+        _speechListeningStarted = false;
+        _spokenText =
+            'Δεν ξεκίνησε το μικρόφωνο. Πάτησέ το για να δοκιμάσεις ξανά.';
+      });
+      return;
+    }
 
-        if (result.finalResult) {
-          _speak(word);
-        }
-      },
-    );
+    if (mounted &&
+        sessionId == _speechSessionId &&
+        _isListening &&
+        _speech.isListening) {
+      _speechListeningStarted = true;
+    }
+  }
+
+  void _handleSpeechStatus(String status) {
+    if (!mounted) {
+      return;
+    }
+    if (status == stt.SpeechToText.listeningStatus) {
+      if (_isListening) {
+        _speechListeningStarted = true;
+      }
+      return;
+    }
+    if (!_isListening || !_speechListeningStarted) {
+      return;
+    }
+    if (status != stt.SpeechToText.doneStatus &&
+        status != stt.SpeechToText.notListeningStatus) {
+      return;
+    }
+
+    final sessionId = ++_speechSessionId;
+    _speechListeningStarted = false;
+    unawaited(_finishEmptySpeechSession(sessionId));
+  }
+
+  void _handleSpeechError(SpeechRecognitionError error) {
+    if (!mounted || !_isListening) {
+      return;
+    }
+
+    final sessionId = ++_speechSessionId;
+    _speechListeningStarted = false;
+    unawaited(_finishEmptySpeechSession(sessionId));
+  }
+
+  Future<void> _finishEmptySpeechSession(int sessionId) async {
+    await _speech.cancel();
+    if (!mounted || sessionId != _speechSessionId || !_isListening) {
+      return;
+    }
+
+    setState(() {
+      _isListening = false;
+      _speechListeningStarted = false;
+      if (_spokenText.trim().isEmpty) {
+        _spokenText = 'Δεν άκουσα καθαρά. Πάτησε το μικρόφωνο και ξαναπές το.';
+      }
+    });
+  }
+
+  Future<void> _closeMicrophoneAndSpeak(_VocWord word, int sessionId) async {
+    await _speech.cancel();
+    if (!mounted || sessionId != _speechSessionId) {
+      return;
+    }
+    await _speak(word);
   }
 
   void _prepareChoices(List<_VocWord> words, _VocWord current) {
@@ -335,19 +445,50 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
     }
 
     final choices = <String>{current.translationGr};
-    final pool =
-        words
-            .where((word) => word.id != current.id)
-            .map((word) => word.translationGr)
-            .where((translation) => translation.isNotEmpty)
-            .toList()
-          ..shuffle(_random);
+    final correctAnswers = current.acceptedAnswers
+        .map(_normalizeAnswer)
+        .toSet();
+    final candidatesByTranslation = <String, _VocWord>{};
 
-    for (final translation in pool) {
+    for (final candidate in words) {
+      if (candidate.id == current.id || candidate.translationGr.isEmpty) {
+        continue;
+      }
+      final normalizedTranslation = _normalizeAnswer(candidate.translationGr);
+      if (normalizedTranslation.isEmpty ||
+          correctAnswers.contains(normalizedTranslation)) {
+        continue;
+      }
+
+      final previous = candidatesByTranslation[normalizedTranslation];
+      if (previous == null ||
+          _quizDistractorScore(current, candidate) >
+              _quizDistractorScore(current, previous)) {
+        candidatesByTranslation[normalizedTranslation] = candidate;
+      }
+    }
+
+    final rankedCandidates = candidatesByTranslation.values.toList();
+    final tieBreakers = <String, int>{
+      for (final candidate in rankedCandidates)
+        candidate.id: _random.nextInt(1000),
+    };
+    rankedCandidates.sort((first, second) {
+      final scoreComparison = _quizDistractorScore(
+        current,
+        second,
+      ).compareTo(_quizDistractorScore(current, first));
+      if (scoreComparison != 0) {
+        return scoreComparison;
+      }
+      return tieBreakers[first.id]!.compareTo(tieBreakers[second.id]!);
+    });
+
+    for (final candidate in rankedCandidates) {
       if (choices.length >= 4) {
         break;
       }
-      choices.add(translation);
+      choices.add(candidate.translationGr);
     }
 
     final prepared = choices.toList()..shuffle(_random);
@@ -500,35 +641,37 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
                       fontWeight: FontWeight.w900,
                     ),
                   ),
-                  const SizedBox(height: 14),
-                  if (wrong.isEmpty)
-                    const Text(
-                      'Δεν υπήρχαν λάθη.',
-                      style: TextStyle(fontWeight: FontWeight.w800),
-                    )
-                  else ...[
-                    const Text(
-                      'Λάθος λέξεις/φράσεις:',
-                      style: TextStyle(
-                        color: Color(0xFF7D1010),
-                        fontSize: 15,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Flexible(
-                      child: SingleChildScrollView(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            for (final attempt in wrong) ...[
-                              _WrongAttemptCard(attempt: attempt),
-                              const SizedBox(height: 10),
-                            ],
-                          ],
+                  if (mode != _VocMode.speaking) ...[
+                    const SizedBox(height: 14),
+                    if (wrong.isEmpty)
+                      const Text(
+                        'Δεν υπήρχαν λάθη.',
+                        style: TextStyle(fontWeight: FontWeight.w800),
+                      )
+                    else ...[
+                      const Text(
+                        'Λάθος λέξεις/φράσεις:',
+                        style: TextStyle(
+                          color: Color(0xFF7D1010),
+                          fontSize: 15,
+                          fontWeight: FontWeight.w900,
                         ),
                       ),
-                    ),
+                      const SizedBox(height: 10),
+                      Flexible(
+                        child: SingleChildScrollView(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              for (final attempt in wrong) ...[
+                                _WrongAttemptCard(attempt: attempt),
+                                const SizedBox(height: 10),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
                 ],
               ),
@@ -642,7 +785,7 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
                 : allWords
                       .where(
                         (word) =>
-                            word.unitKey == _selectedUnit &&
+                            _selectedUnits.contains(word.unitKey) &&
                             (!_importantOnly || word.isImportant),
                       )
                       .toList();
@@ -691,11 +834,11 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
                 children: [
                   _StudyVocHome(
                     units: units,
-                    selectedUnit: _selectedUnit,
+                    selectedUnits: _selectedUnits,
                     importantOnly: _importantOnly,
                     unitValidationError: _unitValidationError,
                     onBack: () => Navigator.of(context).pop(),
-                    onUnitChanged: _selectUnit,
+                    onUnitToggled: _toggleUnit,
                     onImportantChanged: (value) {
                       setState(() {
                         _importantOnly = value;
@@ -705,7 +848,8 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
                       });
                     },
                     onModeSelected: _selectMode,
-                    showEmptyMessage: _selectedUnit != null && words.isEmpty,
+                    showEmptyMessage:
+                        _selectedUnits.isNotEmpty && words.isEmpty,
                   ),
                 ],
               );
@@ -722,6 +866,7 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
                   const SizedBox(height: 14),
                   _StudyCompletedCard(
                     wordCount: selectedWords.length,
+                    onTestModeSelected: _selectMode,
                     onReviewAgain: () {
                       setState(() {
                         _learnedWordIds.removeAll(
@@ -837,22 +982,22 @@ class _StudyYourVocPageState extends State<StudyYourVocPage> {
 class _StudyVocHome extends StatelessWidget {
   const _StudyVocHome({
     required this.units,
-    required this.selectedUnit,
+    required this.selectedUnits,
     required this.importantOnly,
     required this.unitValidationError,
     required this.onBack,
-    required this.onUnitChanged,
+    required this.onUnitToggled,
     required this.onImportantChanged,
     required this.onModeSelected,
     required this.showEmptyMessage,
   });
 
   final List<_VocUnit> units;
-  final String? selectedUnit;
+  final Set<String> selectedUnits;
   final bool importantOnly;
   final bool unitValidationError;
   final VoidCallback onBack;
-  final ValueChanged<String?> onUnitChanged;
+  final ValueChanged<String> onUnitToggled;
   final ValueChanged<bool> onImportantChanged;
   final ValueChanged<_VocMode> onModeSelected;
   final bool showEmptyMessage;
@@ -870,53 +1015,56 @@ class _StudyVocHome extends StatelessWidget {
       ),
       decoration: const BoxDecoration(
         gradient: LinearGradient(
-          begin: Alignment.topLeft,
+          begin: Alignment.topCenter,
           end: Alignment.bottomRight,
-          colors: [Color(0xFFFFFCFA), Color(0xFFF8F8FF), Color(0xFFEEF3FF)],
-          stops: [0, 0.52, 1],
+          colors: [Color(0xFFFCFBFF), Color(0xFFFFFFFF), Color(0xFFF9F8FF)],
+          stops: [0, 0.5, 1],
         ),
       ),
       child: Stack(
         children: [
           const Positioned(
-            top: -80,
-            right: -70,
-            child: _SoftGlow(color: Color(0x337E6BFF), size: 230),
+            top: -132,
+            right: -95,
+            child: _SoftGlow(color: Color(0x247A58F3), size: 280),
           ),
           const Positioned(
-            top: 80,
-            left: -90,
-            child: _SoftGlow(color: Color(0x22FF9B63), size: 210),
+            top: 42,
+            left: -130,
+            child: _SoftGlow(color: Color(0x14A98CFF), size: 260),
           ),
           Padding(
             padding: EdgeInsets.fromLTRB(
-              compact ? 14 : 20,
-              compact ? 12 : 18,
-              compact ? 14 : 20,
+              compact ? 20 : 30,
+              compact ? 18 : 22,
+              compact ? 20 : 30,
               34,
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 _StudyVocHero(onBack: onBack, compact: compact),
-                SizedBox(height: compact ? 14 : 20),
+                SizedBox(height: compact ? 8 : 12),
+                const _StudyVocSectionTitle('ΕΝΟΤΗΤΑ'),
+                const SizedBox(height: 11),
                 _StudyVocSettings(
                   units: units,
-                  selectedUnit: selectedUnit,
+                  selectedUnits: selectedUnits,
                   importantOnly: importantOnly,
                   unitValidationError: unitValidationError,
-                  onUnitChanged: onUnitChanged,
+                  onUnitToggled: onUnitToggled,
                   onImportantChanged: onImportantChanged,
                   compact: compact,
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 27),
+                const _StudyVocSectionTitle('ΤΡΟΠΟΙ ΜΕΛΕΤΗΣ'),
+                const SizedBox(height: 11),
                 _ModeMenu(onSelected: onModeSelected),
                 if (showEmptyMessage) ...[
                   const SizedBox(height: 6),
                   const _EmptyUnitMessage(),
                 ],
-                const SizedBox(height: 22),
-                const _StudyVocFooterDecoration(),
+                const SizedBox(height: 12),
               ],
             ),
           ),
@@ -934,78 +1082,84 @@ class _StudyVocHero extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Material(
-              color: Colors.white.withValues(alpha: 0.92),
+    return SizedBox(
+      height: compact ? 164 : 171,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned(
+            left: compact ? -7 : -15,
+            top: 0,
+            child: Material(
+              color: Colors.white.withValues(alpha: 0.94),
               shape: const CircleBorder(),
-              elevation: 6,
-              shadowColor: const Color(0x26D52323),
+              elevation: 5,
+              shadowColor: const Color(0x1F28116B),
               child: InkWell(
                 onTap: onBack,
                 customBorder: const CircleBorder(),
                 child: SizedBox(
-                  width: compact ? 50 : 58,
-                  height: compact ? 50 : 58,
+                  width: compact ? 42 : 44,
+                  height: compact ? 42 : 44,
                   child: Icon(
-                    Icons.close_rounded,
-                    color: const Color(0xFFE32636),
-                    size: compact ? 37 : 43,
-                    weight: 900,
+                    Icons.arrow_back_rounded,
+                    color: const Color(0xFF3C17A6),
+                    size: compact ? 28 : 30,
                   ),
                 ),
               ),
             ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                'Study your voc',
-                maxLines: 2,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: const Color(0xFF28116B),
-                  fontSize: compact ? 31 : 38,
-                  fontWeight: FontWeight.w900,
-                  height: 0.98,
-                  letterSpacing: -1.2,
-                  shadows: const [
-                    Shadow(
-                      color: Color(0x20754EF2),
-                      blurRadius: 14,
-                      offset: Offset(0, 4),
-                    ),
-                  ],
-                ),
+          ),
+          Positioned(
+            left: compact ? 54 : 63,
+            top: compact ? 43 : 48,
+            right: 0,
+            child: Text(
+              'Study your voc',
+              maxLines: 1,
+              style: TextStyle(
+                color: const Color(0xFF17094E),
+                fontSize: compact ? 33 : 38,
+                fontWeight: FontWeight.w900,
+                height: 1,
+                letterSpacing: -1.5,
               ),
-            ),
-            const SizedBox(width: 4),
-            SizedBox(
-              width: compact ? 88 : 112,
-              height: compact ? 92 : 116,
-              child: Image.asset(
-                'lib/img/studyyourvoc.png',
-                fit: BoxFit.contain,
-              ),
-            ),
-          ],
-        ),
-        Transform.translate(
-          offset: const Offset(0, -4),
-          child: Text(
-            'Μελέτησε, εξάσκησε και\nβελτίωσε το λεξιλόγιό σου!',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: const Color(0xFF77718F),
-              fontSize: compact ? 17 : 20,
-              fontWeight: FontWeight.w700,
-              height: 1.35,
             ),
           ),
-        ),
-      ],
+          Positioned(
+            left: compact ? 54 : 63,
+            top: compact ? 92 : 100,
+            child: Text(
+              'Μελέτησε, εξάσκησε και\nβελτίωσε το λεξιλόγιό σου!',
+              style: TextStyle(
+                color: const Color(0xFF68738A),
+                fontSize: compact ? 17 : 18,
+                fontWeight: FontWeight.w500,
+                height: 1.42,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StudyVocSectionTitle extends StatelessWidget {
+  const _StudyVocSectionTitle(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      style: const TextStyle(
+        color: Color(0xFF6953AA),
+        fontSize: 15,
+        fontWeight: FontWeight.w800,
+        letterSpacing: .15,
+      ),
     );
   }
 }
@@ -1013,163 +1167,150 @@ class _StudyVocHero extends StatelessWidget {
 class _StudyVocSettings extends StatelessWidget {
   const _StudyVocSettings({
     required this.units,
-    required this.selectedUnit,
+    required this.selectedUnits,
     required this.importantOnly,
     required this.unitValidationError,
-    required this.onUnitChanged,
+    required this.onUnitToggled,
     required this.onImportantChanged,
     required this.compact,
   });
 
   final List<_VocUnit> units;
-  final String? selectedUnit;
+  final Set<String> selectedUnits;
   final bool importantOnly;
   final bool unitValidationError;
-  final ValueChanged<String?> onUnitChanged;
+  final ValueChanged<String> onUnitToggled;
   final ValueChanged<bool> onImportantChanged;
   final bool compact;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: compact ? 14 : 18),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.88),
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: const Color(0x1F7964EE)),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x126051B4),
-            blurRadius: 28,
-            offset: Offset(0, 12),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          AnimatedContainer(
+    return Column(
+      children: [
+        Material(
+          color: Colors.white.withValues(alpha: .94),
+          elevation: 3,
+          shadowColor: const Color(0x1C403273),
+          borderRadius: BorderRadius.circular(13),
+          child: AnimatedContainer(
             duration: const Duration(milliseconds: 180),
-            height: compact ? 82 : 92,
-            margin: const EdgeInsets.symmetric(vertical: 4),
-            padding: const EdgeInsets.symmetric(horizontal: 6),
+            padding: EdgeInsets.symmetric(
+              horizontal: compact ? 14 : 16,
+              vertical: 14,
+            ),
             decoration: BoxDecoration(
               color: unitValidationError
                   ? const Color(0xFFFFF2F2)
-                  : Colors.transparent,
-              borderRadius: BorderRadius.circular(20),
+                  : Colors.white.withValues(alpha: .01),
+              borderRadius: BorderRadius.circular(13),
               border: Border.all(
                 color: unitValidationError
                     ? const Color(0xFFE32636)
-                    : Colors.transparent,
-                width: 2,
+                    : const Color(0x0D403273),
+                width: unitValidationError ? 2 : 1,
               ),
             ),
-            child: Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const _SettingsIcon(
-                  icon: Icons.menu_book_rounded,
-                  foreground: Color(0xFF7448EC),
-                  background: Color(0xFFF2EDFF),
+                Row(
+                  children: [
+                    Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF0EBFF),
+                        borderRadius: BorderRadius.circular(11),
+                      ),
+                      child: const Icon(
+                        Icons.menu_book_rounded,
+                        color: Color(0xFF5A31CF),
+                        size: 21,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      'Ενότητα',
+                      style: TextStyle(
+                        color: unitValidationError
+                            ? const Color(0xFFE32636)
+                            : const Color(0xFF2A1B50),
+                        fontSize: compact ? 17 : 18,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Ενότητα',
-                        style: TextStyle(
-                          color: unitValidationError
-                              ? const Color(0xFFE32636)
-                              : const Color(0xFF2A1B50),
-                          fontSize: 15,
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 7,
+                  runSpacing: 7,
+                  children: [
+                    for (final unit in units)
+                      FilterChip(
+                        label: Text(unit.label),
+                        selected: selectedUnits.contains(unit.value),
+                        onSelected: (_) => onUnitToggled(unit.value),
+                        selectedColor: const Color(0xFFE8E0FF),
+                        showCheckmark: false,
+                        labelPadding: const EdgeInsets.symmetric(horizontal: 5),
+                        side: BorderSide(
+                          color: selectedUnits.contains(unit.value)
+                              ? const Color(0xFF6940EB)
+                              : const Color(0xFFD9D3EB),
+                        ),
+                        labelStyle: const TextStyle(
+                          color: Color(0xFF2A1B50),
+                          fontSize: 13,
                           fontWeight: FontWeight.w700,
                         ),
                       ),
-                      const SizedBox(height: 2),
-                      DropdownButtonHideUnderline(
-                        child: DropdownButton<String>(
-                          value: selectedUnit,
-                          isDense: true,
-                          isExpanded: true,
-                          icon: _RoundTrailingIcon(
-                            icon: Icons.keyboard_arrow_down_rounded,
-                            color: unitValidationError
-                                ? const Color(0xFFE32636)
-                                : const Color(0xFF6940EB),
-                          ),
-                          hint: Text(
-                            'Επέλεξε ενότητα να μελετήσεις',
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: unitValidationError
-                                  ? const Color(0xFFE32636)
-                                  : const Color(0xFF77718F),
-                              fontSize: compact ? 14 : 15,
-                              fontWeight: FontWeight.w800,
-                              height: 1.15,
-                            ),
-                          ),
-                          borderRadius: BorderRadius.circular(18),
-                          style: const TextStyle(
-                            color: Color(0xFF22134F),
-                            fontSize: 22,
-                            fontWeight: FontWeight.w900,
-                          ),
-                          items: [
-                            for (final unit in units)
-                              DropdownMenuItem(
-                                value: unit.value,
-                                child: Text(
-                                  unit.label,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                          ],
-                          onChanged: onUnitChanged,
-                        ),
-                      ),
-                    ],
-                  ),
+                  ],
                 ),
               ],
             ),
           ),
-          const Divider(height: 1, color: Color(0x1F7964EE)),
-          SizedBox(
-            height: compact ? 76 : 84,
-            child: Row(
-              children: [
-                const _SettingsIcon(
-                  icon: Icons.star_rounded,
-                  foreground: Color(0xFFFFBD18),
-                  background: Color(0xFFFFF5E7),
-                ),
-                const SizedBox(width: 14),
-                const Expanded(
-                  child: Text(
-                    'Σημαντικές λέξεις μόνο',
-                    style: TextStyle(
-                      color: Color(0xFF25174E),
-                      fontSize: 17,
-                      fontWeight: FontWeight.w700,
+        ),
+        const SizedBox(height: 14),
+        Material(
+          color: Colors.white.withValues(alpha: .94),
+          elevation: 3,
+          shadowColor: const Color(0x1C403273),
+          borderRadius: BorderRadius.circular(13),
+          child: SizedBox(
+            height: compact ? 58 : 61,
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: compact ? 14 : 16),
+              child: Row(
+                children: [
+                  const _SettingsIcon(
+                    icon: Icons.star_rounded,
+                    foreground: Color(0xFFFFBD18),
+                    background: Color(0xFFFFF5E7),
+                  ),
+                  const SizedBox(width: 17),
+                  const Expanded(
+                    child: Text(
+                      'Σημαντικές λέξεις μόνο',
+                      style: TextStyle(
+                        color: Color(0xFF25174E),
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
-                ),
-                Switch.adaptive(
-                  value: importantOnly,
-                  activeTrackColor: const Color(0xFF7547EF),
-                  activeThumbColor: Colors.white,
-                  onChanged: onImportantChanged,
-                ),
-              ],
+                  Switch.adaptive(
+                    value: importantOnly,
+                    activeTrackColor: const Color(0xFF7547EF),
+                    activeThumbColor: Colors.white,
+                    onChanged: onImportantChanged,
+                  ),
+                ],
+              ),
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
@@ -1188,30 +1329,13 @@ class _SettingsIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 54,
-      height: 54,
-      decoration: BoxDecoration(color: background, shape: BoxShape.circle),
-      child: Icon(icon, color: foreground, size: 31),
-    );
-  }
-}
-
-class _RoundTrailingIcon extends StatelessWidget {
-  const _RoundTrailingIcon({required this.icon, required this.color});
-
-  final IconData icon;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 46,
-      height: 46,
-      decoration: const BoxDecoration(
-        color: Color(0xFFF7F5FF),
-        shape: BoxShape.circle,
+      width: 52,
+      height: 52,
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(18),
       ),
-      child: Icon(icon, color: color, size: 31),
+      child: Icon(icon, color: foreground, size: 31),
     );
   }
 }
@@ -1270,42 +1394,42 @@ class _ModeMenu extends StatelessWidget {
       (
         _VocMode.study,
         'Μελέτη',
-        'Διάβασε και μάθε\nτο λεξιλόγιο',
+        'Διάβασε και μάθε το λεξιλόγιο',
         Icons.menu_book_rounded,
-        Color(0xFF6840E8),
-        Color(0xFFF5F0FF),
+        Color(0xFF6539ED),
+        Color(0xFF8A59F7),
       ),
       (
         _VocMode.speaking,
         'Προφορικά',
         'Πες τις λέξεις δυνατά\nκαι εξάσκησε την προφορά σου',
         Icons.record_voice_over_rounded,
-        Color(0xFF239A39),
-        Color(0xFFF0FFF2),
+        Color(0xFF27B848),
+        Color(0xFF5CD564),
       ),
       (
         _VocMode.multipleChoice,
         'Quiz',
         'Απάντησε σε ερωτήσεις\nπολλαπλής επιλογής',
         Icons.quiz_rounded,
-        Color(0xFFFF7A08),
-        Color(0xFFFFF8ED),
+        Color(0xFFFF6711),
+        Color(0xFFFF8C35),
       ),
       (
         _VocMode.writeForeign,
         'Ελληνικά – Ξένη Γλώσσα',
-        'Μετάφρασε από τα ελληνικά\nστη ξένη γλώσσα',
+        'Βρες τη σωστή μετάφραση',
         Icons.translate_rounded,
-        Color(0xFF2468E8),
-        Color(0xFFF0F6FF),
+        Color(0xFF0069E8),
+        Color(0xFF2487F7),
       ),
       (
         _VocMode.writeGreek,
         'Ξένη Γλώσσα – Ελληνικά',
-        'Μετάφρασε από τη ξένη γλώσσα\nστα ελληνικά',
+        'Βρες τη σωστή μετάφραση',
         Icons.edit_rounded,
-        Color(0xFFFF4F59),
-        Color(0xFFFFF2F4),
+        Color(0xFFEB3E6A),
+        Color(0xFFFF6C88),
       ),
     ];
 
@@ -1321,7 +1445,7 @@ class _ModeMenu extends StatelessWidget {
             background: mode.$6,
             onTap: () => onSelected(mode.$1),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 13),
         ],
       ],
     );
@@ -1348,153 +1472,78 @@ class _ModeMenuCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: background,
-      borderRadius: BorderRadius.circular(26),
+      color: Colors.white.withValues(alpha: .95),
+      borderRadius: BorderRadius.circular(13),
       elevation: 3,
-      shadowColor: const Color(0x126051B4),
+      shadowColor: const Color(0x1C403273),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(26),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 14, 12),
-          child: Row(
-            children: [
-              Container(
-                width: 78,
-                height: 78,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [color.withValues(alpha: 0.68), color],
+        borderRadius: BorderRadius.circular(13),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 82),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 11, 18, 11),
+            child: Row(
+              children: [
+                Container(
+                  width: 55,
+                  height: 55,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [background, color],
+                    ),
+                    borderRadius: BorderRadius.circular(15),
+                    boxShadow: [
+                      BoxShadow(
+                        color: color.withValues(alpha: 0.18),
+                        blurRadius: 10,
+                        offset: const Offset(0, 5),
+                      ),
+                    ],
                   ),
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(
-                      color: color.withValues(alpha: 0.22),
-                      blurRadius: 16,
-                      offset: const Offset(0, 8),
-                    ),
-                  ],
+                  child: Icon(icon, color: Colors.white, size: 32),
                 ),
-                child: Icon(icon, color: Colors.white, size: 42),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      label,
-                      style: TextStyle(
-                        color: color,
-                        fontSize: 20,
-                        fontWeight: FontWeight.w900,
-                        height: 1.1,
+                const SizedBox(width: 23),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xFF10142D),
+                          fontSize: 19,
+                          fontWeight: FontWeight.w900,
+                          height: 1.1,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      description,
-                      style: const TextStyle(
-                        color: Color(0xFF514B63),
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        height: 1.3,
+                      const SizedBox(height: 7),
+                      Text(
+                        description,
+                        style: const TextStyle(
+                          color: Color(0xFF68738A),
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                          height: 1.25,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                width: 43,
-                height: 43,
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.82),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white),
-                ),
-                child: Icon(
+                const SizedBox(width: 8),
+                const Icon(
                   Icons.chevron_right_rounded,
-                  color: color,
-                  size: 31,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _StudyVocFooterDecoration extends StatelessWidget {
-  const _StudyVocFooterDecoration();
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 72,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          Positioned(
-            left: 20,
-            bottom: 2,
-            child: Transform.rotate(
-              angle: -0.12,
-              child: Container(
-                width: 108,
-                height: 38,
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFFA14EED), Color(0xFFE89CFF)],
-                  ),
-                  borderRadius: BorderRadius.circular(10),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Color(0x307D48D8),
-                      blurRadius: 16,
-                      offset: Offset(0, 8),
-                    ),
-                  ],
-                ),
-                child: const Icon(
-                  Icons.menu_book_rounded,
-                  color: Colors.white70,
-                  size: 27,
-                ),
-              ),
-            ),
-          ),
-          const Positioned(
-            right: 122,
-            bottom: 28,
-            child: Icon(Icons.circle, color: Color(0xFF21CBE4), size: 13),
-          ),
-          const Positioned(
-            right: 52,
-            bottom: 1,
-            child: Icon(
-              Icons.star_rounded,
-              color: Color(0xFFFFC81F),
-              size: 52,
-              shadows: [
-                Shadow(
-                  color: Color(0x45D69A00),
-                  blurRadius: 7,
-                  offset: Offset(0, 4),
+                  color: Color(0xFF3714BA),
+                  size: 30,
                 ),
               ],
             ),
           ),
-          const Positioned(
-            right: 3,
-            bottom: 42,
-            child: Icon(Icons.auto_awesome, color: Color(0xFF5B9CFF), size: 28),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -1673,6 +1722,7 @@ class _ModeBody extends StatelessWidget {
           choices: choices,
           selectedChoice: selectedChoice,
           lastAnswerCorrect: lastAnswerCorrect,
+          onSpeak: onSpeak,
           onSelected: onChoiceSelected,
           onNext: onNext,
         );
@@ -1707,10 +1757,12 @@ class _ModeBody extends StatelessWidget {
 class _StudyCompletedCard extends StatelessWidget {
   const _StudyCompletedCard({
     required this.wordCount,
+    required this.onTestModeSelected,
     required this.onReviewAgain,
   });
 
   final int wordCount;
+  final ValueChanged<_VocMode> onTestModeSelected;
   final VoidCallback onReviewAgain;
 
   @override
@@ -1751,13 +1803,87 @@ class _StudyCompletedCard extends StatelessWidget {
               fontWeight: FontWeight.w700,
             ),
           ),
-          const SizedBox(height: 26),
+          const SizedBox(height: 28),
+          const Text(
+            'Πάμε να σε ελέγξουμε τώρα;',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Color(0xFF173A8A),
+              fontSize: 20,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 16),
+          _StudyTestModeButton(
+            label: 'Προφορικά',
+            icon: Icons.record_voice_over_rounded,
+            color: const Color(0xFF27B848),
+            onPressed: () => onTestModeSelected(_VocMode.speaking),
+          ),
+          const SizedBox(height: 10),
+          _StudyTestModeButton(
+            label: 'Κουίζ',
+            icon: Icons.quiz_rounded,
+            color: const Color(0xFFFF6711),
+            onPressed: () => onTestModeSelected(_VocMode.multipleChoice),
+          ),
+          const SizedBox(height: 10),
+          _StudyTestModeButton(
+            label: 'Ελληνικά – Ξένη Γλώσσα',
+            icon: Icons.translate_rounded,
+            color: const Color(0xFF0069E8),
+            onPressed: () => onTestModeSelected(_VocMode.writeForeign),
+          ),
+          const SizedBox(height: 10),
+          _StudyTestModeButton(
+            label: 'Ξένη Γλώσσα – Ελληνικά',
+            icon: Icons.edit_rounded,
+            color: const Color(0xFFEB3E6A),
+            onPressed: () => onTestModeSelected(_VocMode.writeGreek),
+          ),
+          const SizedBox(height: 22),
           OutlinedButton.icon(
             onPressed: onReviewAgain,
             icon: const Icon(Icons.refresh_rounded),
             label: const Text('Επανάληψη όλων'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _StudyTestModeButton extends StatelessWidget {
+  const _StudyTestModeButton({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.onPressed,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: FilledButton.icon(
+        onPressed: onPressed,
+        icon: Icon(icon, size: 23),
+        label: Text(label, textAlign: TextAlign.center),
+        style: FilledButton.styleFrom(
+          backgroundColor: color,
+          foregroundColor: Colors.white,
+          minimumSize: const Size.fromHeight(54),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w900),
+        ),
       ),
     );
   }
@@ -1897,80 +2023,94 @@ class _StudyFlashCard extends StatelessWidget {
                         ),
                       ),
                     ),
-                    Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (!showBack)
-                            IconButton.filled(
-                              onPressed: onSpeak,
-                              icon: const Icon(Icons.volume_up_rounded),
-                              style: IconButton.styleFrom(
-                                backgroundColor: const Color(0xFF5D4BE2),
-                                foregroundColor: Colors.white,
-                                fixedSize: const Size(54, 54),
+                    Positioned.fill(
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          return SingleChildScrollView(
+                            child: ConstrainedBox(
+                              constraints: BoxConstraints(
+                                minHeight: constraints.maxHeight,
+                              ),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  if (!showBack)
+                                    IconButton.filled(
+                                      onPressed: onSpeak,
+                                      icon: const Icon(Icons.volume_up_rounded),
+                                      style: IconButton.styleFrom(
+                                        backgroundColor: const Color(
+                                          0xFF5D4BE2,
+                                        ),
+                                        foregroundColor: Colors.white,
+                                        fixedSize: const Size(54, 54),
+                                      ),
+                                    ),
+                                  SizedBox(height: showBack ? 0 : 20),
+                                  Text(
+                                    showBack ? word.translationGr : word.word,
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      color: Color(0xFF173A8A),
+                                      fontSize: 36,
+                                      fontWeight: FontWeight.w900,
+                                      height: 1.08,
+                                    ),
+                                  ),
+                                  if (word.partOfSpeech != null) ...[
+                                    const SizedBox(height: 10),
+                                    Text(
+                                      word.partOfSpeech!,
+                                      style: const TextStyle(
+                                        color: Color(0xFF6B6B78),
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ],
+                                  const SizedBox(height: 22),
+                                  Text(
+                                    showBack
+                                        ? 'Πάτησε για τη λέξη • Σύρε για επόμενη'
+                                        : 'Πάτησε για μετάφραση • Σύρε για επόμενη',
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      color: Color(0xFF77718F),
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  FilledButton.icon(
+                                    onPressed: onLearned,
+                                    icon: const Icon(Icons.task_alt_rounded),
+                                    label: const Text('Την έμαθα'),
+                                    style: FilledButton.styleFrom(
+                                      backgroundColor: const Color(0xFFDDF5E5),
+                                      foregroundColor: const Color(0xFF24734A),
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 22,
+                                        vertical: 12,
+                                      ),
+                                      elevation: 0,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(16),
+                                        side: const BorderSide(
+                                          color: Color(0xFFB9E5C8),
+                                        ),
+                                      ),
+                                      textStyle: const TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
-                          SizedBox(height: showBack ? 0 : 20),
-                          Text(
-                            showBack ? word.translationGr : word.word,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              color: Color(0xFF173A8A),
-                              fontSize: 36,
-                              fontWeight: FontWeight.w900,
-                              height: 1.08,
-                            ),
-                          ),
-                          if (word.partOfSpeech != null) ...[
-                            const SizedBox(height: 10),
-                            Text(
-                              word.partOfSpeech!,
-                              style: const TextStyle(
-                                color: Color(0xFF6B6B78),
-                                fontSize: 15,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ],
-                          const SizedBox(height: 22),
-                          Text(
-                            showBack
-                                ? 'Πάτησε για τη λέξη • Σύρε για επόμενη'
-                                : 'Πάτησε για μετάφραση • Σύρε για επόμενη',
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              color: Color(0xFF77718F),
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          FilledButton.icon(
-                            onPressed: onLearned,
-                            icon: const Icon(Icons.task_alt_rounded),
-                            label: const Text('Την έμαθα'),
-                            style: FilledButton.styleFrom(
-                              backgroundColor: const Color(0xFFDDF5E5),
-                              foregroundColor: const Color(0xFF24734A),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 22,
-                                vertical: 12,
-                              ),
-                              elevation: 0,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16),
-                                side: const BorderSide(
-                                  color: Color(0xFFB9E5C8),
-                                ),
-                              ),
-                              textStyle: const TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w900,
-                              ),
-                            ),
-                          ),
-                        ],
+                          );
+                        },
                       ),
                     ),
                   ],
@@ -2078,6 +2218,7 @@ class _MultipleChoiceCard extends StatelessWidget {
     required this.choices,
     required this.selectedChoice,
     required this.lastAnswerCorrect,
+    required this.onSpeak,
     required this.onSelected,
     required this.onNext,
   });
@@ -2086,6 +2227,7 @@ class _MultipleChoiceCard extends StatelessWidget {
   final List<String> choices;
   final String? selectedChoice;
   final bool? lastAnswerCorrect;
+  final VoidCallback onSpeak;
   final ValueChanged<String> onSelected;
   final VoidCallback onNext;
 
@@ -2093,14 +2235,32 @@ class _MultipleChoiceCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return _PracticePanel(
       children: [
-        Text(
-          word.word,
-          textAlign: TextAlign.center,
-          style: const TextStyle(
-            color: Color(0xFF173A8A),
-            fontSize: 32,
-            fontWeight: FontWeight.w900,
-          ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Flexible(
+              child: Text(
+                word.word,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Color(0xFF173A8A),
+                  fontSize: 32,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            IconButton.filledTonal(
+              onPressed: onSpeak,
+              tooltip: 'Άκουσε τη λέξη ή φράση',
+              icon: const Icon(Icons.volume_up_rounded),
+              style: IconButton.styleFrom(
+                backgroundColor: const Color(0xFF5D4BE2),
+                foregroundColor: Colors.white,
+                fixedSize: const Size(48, 48),
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 22),
         for (final choice in choices) ...[
@@ -2110,11 +2270,11 @@ class _MultipleChoiceCard extends StatelessWidget {
             correct: selectedChoice == null
                 ? null
                 : choice == word.translationGr,
-            onTap: () => onSelected(choice),
+            onTap: selectedChoice == null ? () => onSelected(choice) : null,
           ),
           const SizedBox(height: 10),
         ],
-        _AnswerResult(correct: lastAnswerCorrect),
+        _AnswerResult(correct: lastAnswerCorrect, wrongText: 'Λάθος'),
         if (selectedChoice != null)
           FilledButton(onPressed: onNext, child: const Text('Επόμενη')),
       ],
@@ -2214,7 +2374,7 @@ class _ChoiceButton extends StatelessWidget {
   final String label;
   final bool selected;
   final bool? correct;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -2284,10 +2444,15 @@ class _PracticePanel extends StatelessWidget {
 }
 
 class _AnswerResult extends StatelessWidget {
-  const _AnswerResult({required this.correct, this.correctAnswer});
+  const _AnswerResult({
+    required this.correct,
+    this.correctAnswer,
+    this.wrongText,
+  });
 
   final bool? correct;
   final String? correctAnswer;
+  final String? wrongText;
 
   @override
   Widget build(BuildContext context) {
@@ -2300,6 +2465,8 @@ class _AnswerResult extends StatelessWidget {
       child: Text(
         correct!
             ? 'Σωστό'
+            : wrongText != null
+            ? wrongText!
             : correctAnswer == null
             ? 'Δοκίμασε ξανά'
             : 'Σωστό: $correctAnswer',
@@ -2591,6 +2758,67 @@ class _VocWord {
   }
 }
 
+int _quizDistractorScore(_VocWord current, _VocWord candidate) {
+  var score = 0;
+
+  if (current.unitKey == candidate.unitKey) {
+    score += 45;
+  }
+
+  final currentPartOfSpeech = _normalizedPartOfSpeech(current.partOfSpeech);
+  final candidatePartOfSpeech = _normalizedPartOfSpeech(candidate.partOfSpeech);
+  if (currentPartOfSpeech != null && candidatePartOfSpeech != null) {
+    score += currentPartOfSpeech == candidatePartOfSpeech ? 90 : -25;
+  }
+
+  final currentTranslation = _normalizeAnswer(current.translationGr);
+  final candidateTranslation = _normalizeAnswer(candidate.translationGr);
+  final lengthDifference =
+      (currentTranslation.length - candidateTranslation.length).abs();
+  score += max(0, 24 - lengthDifference * 3);
+
+  final currentWordCount = currentTranslation
+      .split(' ')
+      .where((part) => part.isNotEmpty)
+      .length;
+  final candidateWordCount = candidateTranslation
+      .split(' ')
+      .where((part) => part.isNotEmpty)
+      .length;
+  if (currentWordCount == candidateWordCount) {
+    score += 14;
+  }
+
+  final commonSuffixLength = _commonSuffixLength(
+    currentTranslation,
+    candidateTranslation,
+  );
+  if (commonSuffixLength >= 4) {
+    score += 22;
+  } else if (commonSuffixLength == 3) {
+    score += 15;
+  } else if (commonSuffixLength == 2) {
+    score += 8;
+  }
+
+  return score;
+}
+
+String? _normalizedPartOfSpeech(String? value) {
+  final normalized = value?.trim().toLowerCase();
+  return normalized == null || normalized.isEmpty ? null : normalized;
+}
+
+int _commonSuffixLength(String first, String second) {
+  var length = 0;
+  final limit = min(first.length, second.length);
+  while (length < limit &&
+      first[first.length - 1 - length] == second[second.length - 1 - length]) {
+    length++;
+  }
+  return length;
+}
+
 List<_VocUnit> _buildUnits(List<_VocWord> words) {
   final units = <String, _VocUnit>{};
   for (final word in words) {
@@ -2636,6 +2864,16 @@ String _speechLanguage(String language) {
   }
 }
 
+Duration _speakingListenDuration(String phrase) {
+  final wordCount = phrase
+      .trim()
+      .split(RegExp(r'\s+'))
+      .where((word) => word.isNotEmpty)
+      .length;
+  final seconds = (wordCount * 2 + 4).clamp(8, 30);
+  return Duration(seconds: seconds);
+}
+
 String _modeLabel(_VocMode mode) {
   switch (mode) {
     case _VocMode.study:
@@ -2670,6 +2908,140 @@ bool _answersMatch(String typed, String correct) {
 
 bool _exactAnswerMatch(String typed, String correct) {
   return _normalizeAnswer(typed) == _normalizeAnswer(correct);
+}
+
+bool _spokenAnswerMatch(String recognized, String correct) {
+  final recognizedWords = _normalizeAnswer(recognized).split(' ');
+  final correctWords = _normalizeAnswer(correct).split(' ');
+
+  if (recognizedWords.length != correctWords.length) {
+    return false;
+  }
+
+  for (var index = 0; index < correctWords.length; index++) {
+    final recognizedWord = recognizedWords[index];
+    final correctWord = correctWords[index];
+    if (_canonicalSpeechSpelling(recognizedWord) ==
+        _canonicalSpeechSpelling(correctWord)) {
+      continue;
+    }
+    if (!_areSpeechHomophones(recognizedWord, correctWord) &&
+        !_looselyMatchesSpokenWord(recognizedWord, correctWord)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool _areSpeechHomophones(String first, String second) {
+  const homophoneGroups = <Set<String>>[
+    {'board', 'bored'},
+    {'buy', 'by', 'bye'},
+    {'flower', 'flour'},
+    {'for', 'four'},
+    {'hear', 'here'},
+    {'know', 'no'},
+    {'meat', 'meet'},
+    {'new', 'knew'},
+    {'one', 'won'},
+    {'peace', 'piece'},
+    {'right', 'write'},
+    {'sea', 'see'},
+    {'son', 'sun'},
+    {'the', 'thee'},
+    {'to', 'too', 'two'},
+    {'weak', 'week'},
+  ];
+  return homophoneGroups.any(
+    (group) => group.contains(first) && group.contains(second),
+  );
+}
+
+bool _looselyMatchesSpokenWord(String recognized, String correct) {
+  final first = _canonicalSpeechSpelling(recognized);
+  final second = _canonicalSpeechSpelling(correct);
+  final longestLength = max(first.length, second.length);
+
+  // Οι πολύ μικρές λέξεις αλλάζουν σημασία ακόμη και με ένα γράμμα
+  // (π.χ. cat/cut), οπότε παραμένουν αυστηρές εκτός από γνωστές μορφές.
+  if (longestLength < 5 || first.isEmpty || second.isEmpty) {
+    return false;
+  }
+  if (first[0] != second[0]) {
+    return false;
+  }
+
+  final tolerance = longestLength >= 9 ? 2 : 1;
+  return _levenshtein(first, second) <= tolerance;
+}
+
+String _canonicalSpeechSpelling(String word) {
+  const britishToAmerican = <String, String>{
+    'okay': 'ok',
+    'okey': 'ok',
+    'artefact': 'artifact',
+    'artefacts': 'artifacts',
+    'behaviour': 'behavior',
+    'behaviours': 'behaviors',
+    'cancelled': 'canceled',
+    'cancelling': 'canceling',
+    'catalogue': 'catalog',
+    'catalogues': 'catalogs',
+    'centre': 'center',
+    'centres': 'centers',
+    'colour': 'color',
+    'colours': 'colors',
+    'defence': 'defense',
+    'defences': 'defenses',
+    'dialogue': 'dialog',
+    'dialogues': 'dialogs',
+    'favourite': 'favorite',
+    'favourites': 'favorites',
+    'flavour': 'flavor',
+    'flavours': 'flavors',
+    'grey': 'gray',
+    'honour': 'honor',
+    'honours': 'honors',
+    'humour': 'humor',
+    'labour': 'labor',
+    'labours': 'labors',
+    'licence': 'license',
+    'licences': 'licenses',
+    'litre': 'liter',
+    'litres': 'liters',
+    'metre': 'meter',
+    'metres': 'meters',
+    'neighbour': 'neighbor',
+    'neighbours': 'neighbors',
+    'analyse': 'analyze',
+    'analysed': 'analyzed',
+    'analyses': 'analyzes',
+    'analysing': 'analyzing',
+    'organise': 'organize',
+    'organised': 'organized',
+    'organises': 'organizes',
+    'organising': 'organizing',
+    'organisation': 'organization',
+    'organisations': 'organizations',
+    'practise': 'practice',
+    'programme': 'program',
+    'programmes': 'programs',
+    'realise': 'realize',
+    'realised': 'realized',
+    'realises': 'realizes',
+    'realising': 'realizing',
+    'recognise': 'recognize',
+    'recognised': 'recognized',
+    'recognises': 'recognizes',
+    'recognising': 'recognizing',
+    'theatre': 'theater',
+    'theatres': 'theaters',
+    'travelled': 'traveled',
+    'traveller': 'traveler',
+    'travellers': 'travelers',
+    'travelling': 'traveling',
+  };
+  return britishToAmerican[word] ?? word;
 }
 
 String _normalizeAnswer(String value) {

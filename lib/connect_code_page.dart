@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'push_notification_service.dart';
+
 class ConnectCodePage extends StatefulWidget {
   const ConnectCodePage({required this.onConnected, super.key});
 
@@ -41,6 +43,7 @@ class _ConnectCodePageState extends State<ConnectCodePage> {
         'link_user_by_connect_code',
         params: {'input_connect_code': connectCode},
       );
+      await PushNotificationService.syncCurrentDevice();
 
       if (mounted) {
         widget.onConnected();
@@ -67,6 +70,7 @@ class _ConnectCodePageState extends State<ConnectCodePage> {
   }
 
   Future<void> _goBackToLogin() async {
+    await PushNotificationService.unregisterCurrentDevice();
     await Supabase.instance.client.auth.signOut();
   }
 
@@ -141,7 +145,6 @@ class _ConnectCodePageState extends State<ConnectCodePage> {
                             }
                           },
                           decoration: InputDecoration(
-                            hintText: 'GXXXXX',
                             prefixIcon: const Icon(Icons.key_rounded),
                             errorText: _errorText,
                             border: OutlineInputBorder(

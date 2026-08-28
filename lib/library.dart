@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'article_details_page.dart';
+
 enum _LibraryTab { books, articles }
 
 class LibraryPage extends StatefulWidget {
@@ -53,7 +55,9 @@ class _LibraryPageState extends State<LibraryPage> {
   Future<List<_Article>> _loadArticles() async {
     final rows = await Supabase.instance.client
         .from('articles')
-        .select('title, summary, text, img, min_age, max_age, important')
+        .select(
+          'article_id, title, summary, text, img, min_age, max_age, important',
+        )
         .order('created_at', ascending: false);
 
     return rows
@@ -316,113 +320,21 @@ class _LibraryPageState extends State<LibraryPage> {
     );
   }
 
-  void _showArticleDialog(_Article article) {
-    showDialog<void>(
-      context: context,
-      builder: (context) {
-        return Dialog(
-          backgroundColor: Colors.white,
-          insetPadding: const EdgeInsets.symmetric(horizontal: 22),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(30),
+  void _openArticle(_Article article) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => ArticleDetailsPage(
+          article: ArticleDetailsData(
+            id: article.id,
+            title: article.title,
+            summary: article.summary,
+            legacyText: article.text,
+            coverImageUrl: article.img,
+            ageLabel: article.ageLabel,
+            important: article.important,
           ),
-          clipBehavior: Clip.antiAlias,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 620),
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(22, 20, 22, 24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: InkWell(
-                      onTap: () => Navigator.of(context).pop(),
-                      borderRadius: BorderRadius.circular(18),
-                      child: const SizedBox(
-                        width: 36,
-                        height: 36,
-                        child: Icon(
-                          Icons.close_rounded,
-                          color: Color(0xFF9AA0A9),
-                          size: 24,
-                        ),
-                      ),
-                    ),
-                  ),
-                  if (article.img != null) ...[
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(22),
-                      child: SizedBox(
-                        height: 160,
-                        child: Image.network(
-                          article.img!,
-                          fit: BoxFit.contain,
-                          errorBuilder: (context, error, stackTrace) {
-                            return const _ArticleDialogIcon();
-                          },
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                  ] else ...[
-                    const Center(child: _ArticleDialogIcon()),
-                    const SizedBox(height: 18),
-                  ],
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: Text(
-                          article.title,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            color: Colors.black,
-                            fontSize: 23,
-                            fontWeight: FontWeight.w800,
-                            height: 1.12,
-                          ),
-                        ),
-                      ),
-                      if (article.important) ...[
-                        const SizedBox(width: 8),
-                        const Icon(
-                          Icons.star_rounded,
-                          color: Color(0xFFFFB800),
-                          size: 26,
-                        ),
-                      ],
-                    ],
-                  ),
-                  if (article.ageLabel.isNotEmpty) ...[
-                    const SizedBox(height: 12),
-                    Center(child: _InfoPill(article.ageLabel)),
-                  ],
-                  const SizedBox(height: 20),
-                  Container(
-                    padding: const EdgeInsets.fromLTRB(18, 17, 18, 18),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF7F9FF),
-                      borderRadius: BorderRadius.circular(22),
-                      border: Border.all(color: const Color(0xFFE7ECFA)),
-                    ),
-                    child: Text(
-                      article.text ?? article.summary ?? '',
-                      style: const TextStyle(
-                        color: Color(0xFF535A64),
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        height: 1.46,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
+        ),
+      ),
     );
   }
 
@@ -538,7 +450,7 @@ class _LibraryPageState extends State<LibraryPage> {
                   _ArticlesList(
                     future: _articlesFuture,
                     filter: _filterArticles,
-                    onArticleTap: _showArticleDialog,
+                    onArticleTap: _openArticle,
                   ),
               ],
             ),
@@ -1081,27 +993,6 @@ class _ArticleCard extends StatelessWidget {
   }
 }
 
-class _ArticleDialogIcon extends StatelessWidget {
-  const _ArticleDialogIcon();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 92,
-      height: 92,
-      decoration: BoxDecoration(
-        color: const Color(0xFFEFF3FF),
-        borderRadius: BorderRadius.circular(26),
-      ),
-      child: const Icon(
-        Icons.article_rounded,
-        color: _LibraryPageState._contentColor,
-        size: 44,
-      ),
-    );
-  }
-}
-
 class _LibraryImage extends StatelessWidget {
   const _LibraryImage({required this.url, required this.icon});
 
@@ -1300,6 +1191,7 @@ class _Book {
 
 class _Article {
   const _Article({
+    required this.id,
     required this.title,
     required this.summary,
     required this.text,
@@ -1311,6 +1203,7 @@ class _Article {
 
   factory _Article.fromRow(Map<String, dynamic> row) {
     return _Article(
+      id: _readText(row['article_id']),
       title: _readText(row['title'], fallback: 'Άρθρο'),
       summary: _readNullableText(row['summary']),
       text: _readNullableText(row['text']),
@@ -1321,6 +1214,7 @@ class _Article {
     );
   }
 
+  final String id;
   final String title;
   final String? summary;
   final String? text;
