@@ -8,6 +8,7 @@ import 'teacher_dictation_page.dart';
 import 'teacher_exercises_page.dart';
 import 'teacher_exercise_results_page.dart';
 import 'teacher_payments.dart';
+import 'teacher_personal_homework_page.dart';
 
 class TeachersMenuPage extends StatelessWidget {
   const TeachersMenuPage({super.key, required this.role});
@@ -118,6 +119,14 @@ class TeachersMenuPage extends StatelessWidget {
               icon: Icons.assignment_rounded,
               color: const Color(0xFF385DC9),
               onTap: () => _openPage(context, const StudentsCurriculumPage()),
+            ),
+            const SizedBox(height: 12),
+            _TeacherMenuButton(
+              label: 'Προσωπικά καθήκοντα',
+              icon: Icons.person_pin_rounded,
+              color: const Color(0xFF7B4CC9),
+              onTap: () =>
+                  _openPage(context, const TeacherPersonalHomeworkPage()),
             ),
           ],
         ),

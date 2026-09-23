@@ -83,6 +83,34 @@ class _ProfilePageState extends State<ProfilePage> {
       return;
     }
 
+    if (target.type == _ProfilePhotoType.student) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Ενημέρωση'),
+          content: const Text(
+            'Η φωτογραφία προφίλ των μαθητών μπορεί να εμφανίζεται δημόσια '
+            'στην εφαρμογή όταν κερδίζουν μετάλλια ή ολοκληρώνουν επιτυχώς '
+            'την ορθογραφία.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Ακύρωση'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('ΟΚ'),
+            ),
+          ],
+        ),
+      );
+
+      if (confirmed != true || !mounted) {
+        return;
+      }
+    }
+
     final pickedImage = await _imagePicker.pickImage(
       source: ImageSource.gallery,
       maxWidth: 1200,
@@ -90,7 +118,7 @@ class _ProfilePageState extends State<ProfilePage> {
       imageQuality: 86,
     );
 
-    if (pickedImage == null) {
+    if (pickedImage == null || !mounted) {
       return;
     }
 

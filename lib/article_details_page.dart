@@ -675,22 +675,13 @@ class _ArticleBody extends StatelessWidget {
       }
 
       final image = _bodyImageFromMarkdown(line);
+      final heading = _bodyHeadingFromMarkdown(line);
       if (image != null) {
         flushParagraph();
         widgets.add(_BodyImage(imageUrl: image.url, caption: image.caption));
-      } else if (line.startsWith('## ')) {
+      } else if (heading != null) {
         flushParagraph();
-        widgets.add(
-          Text(
-            line.substring(3).trim(),
-            style: const TextStyle(
-              color: Color(0xFF303744),
-              fontSize: 20,
-              fontWeight: FontWeight.w900,
-              height: 1.25,
-            ),
-          ),
-        );
+        widgets.add(_BodyHeading(heading: heading));
       } else if (line.startsWith('- ') || line.startsWith('• ')) {
         flushParagraph();
         widgets.add(_BulletText(text: line.substring(2).trim()));
@@ -710,6 +701,60 @@ class _ArticleBody extends StatelessWidget {
       ],
     );
   }
+}
+
+class _BodyHeading extends StatelessWidget {
+  const _BodyHeading({required this.heading});
+
+  final _MarkdownBodyHeading heading;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = switch (heading.level) {
+      1 => const TextStyle(
+        color: Color(0xFF253F98),
+        fontSize: 27,
+        fontWeight: FontWeight.w900,
+        height: 1.16,
+      ),
+      2 => const TextStyle(
+        color: Color(0xFF303744),
+        fontSize: 21,
+        fontWeight: FontWeight.w900,
+        height: 1.22,
+      ),
+      _ => const TextStyle(
+        color: Color(0xFF3E4654),
+        fontSize: 18,
+        fontWeight: FontWeight.w800,
+        height: 1.28,
+      ),
+    };
+
+    return SelectableText.rich(
+      TextSpan(children: _inlineSpans(heading.text, style)),
+      style: style,
+    );
+  }
+}
+
+_MarkdownBodyHeading? _bodyHeadingFromMarkdown(String line) {
+  final match = RegExp(r'^(#{1,3})\s+(.+)$').firstMatch(line);
+  if (match == null) {
+    return null;
+  }
+
+  return _MarkdownBodyHeading(
+    level: match.group(1)!.length,
+    text: match.group(2)!.trim(),
+  );
+}
+
+class _MarkdownBodyHeading {
+  const _MarkdownBodyHeading({required this.level, required this.text});
+
+  final int level;
+  final String text;
 }
 
 class _BulletText extends StatelessWidget {

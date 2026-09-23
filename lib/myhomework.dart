@@ -23,7 +23,9 @@ class _MyHomeworkPageState extends State<MyHomeworkPage> {
   static const int _pageSize = 10;
 
   final List<_CurriculumRow> _rows = [];
+  List<_CurriculumRow> _personalRows = const [];
   bool _isInitialLoading = true;
+  bool _isLoadingPersonal = true;
   bool _isLoadingMore = false;
   bool _hasMore = true;
   String? _loadError;
@@ -32,6 +34,39 @@ class _MyHomeworkPageState extends State<MyHomeworkPage> {
   void initState() {
     super.initState();
     _loadNextPage(isInitialLoad: true);
+    _loadPersonalRows();
+  }
+
+  Future<void> _loadPersonalRows() async {
+    if (widget.studentId.isEmpty || widget.classId.isEmpty) {
+      setState(() => _isLoadingPersonal = false);
+      return;
+    }
+    try {
+      final rows = await Supabase.instance.client.rpc(
+        'get_student_personal_homework_rows',
+        params: {
+          'input_student_id': widget.studentId,
+          'input_class_id': widget.classId,
+          'input_from_date': _formatIsoDate(DateTime.now()),
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _personalRows = rows is List
+            ? rows
+                  .whereType<Map>()
+                  .map(
+                    (row) =>
+                        _CurriculumRow.fromRow(Map<String, dynamic>.from(row)),
+                  )
+                  .toList()
+            : const [];
+        _isLoadingPersonal = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _isLoadingPersonal = false);
+    }
   }
 
   Future<void> _loadNextPage({bool isInitialLoad = false}) async {
@@ -113,23 +148,45 @@ class _MyHomeworkPageState extends State<MyHomeworkPage> {
       return <_CurriculumRow>[];
     }
 
-    final rows = await Supabase.instance.client.rpc(
-      'get_student_upcoming_curriculum_rows',
-      params: {
-        'input_student_id': widget.studentId,
-        'input_class_id': widget.classId,
-        'input_from_date': _formatIsoDate(DateTime.now()),
-      },
-    );
+    final results = await Future.wait([
+      Supabase.instance.client.rpc(
+        'get_student_upcoming_curriculum_rows',
+        params: {
+          'input_student_id': widget.studentId,
+          'input_class_id': widget.classId,
+          'input_from_date': _formatIsoDate(DateTime.now()),
+        },
+      ),
+      Supabase.instance.client.rpc(
+        'get_student_personal_homework_rows',
+        params: {
+          'input_student_id': widget.studentId,
+          'input_class_id': widget.classId,
+          'input_from_date': _formatIsoDate(DateTime.now()),
+        },
+      ),
+    ]);
 
-    return rows is List
-        ? rows
-              .whereType<Map>()
-              .map(
-                (row) => _CurriculumRow.fromRow(Map<String, dynamic>.from(row)),
-              )
-              .toList()
-        : <_CurriculumRow>[];
+    final rows = <_CurriculumRow>[];
+    for (var index = 0; index < results.length; index++) {
+      final result = results[index];
+      if (result is! List) continue;
+      rows.addAll(
+        result.whereType<Map>().map((row) {
+          final data = Map<String, dynamic>.from(row);
+          if (index == 1) data['is_personal'] = true;
+          return _CurriculumRow.fromRow(data);
+        }),
+      );
+    }
+    rows.sort((a, b) {
+      final aDate = a.forDate;
+      final bDate = b.forDate;
+      if (aDate == null) return 1;
+      if (bDate == null) return -1;
+      return aDate.compareTo(bDate);
+    });
+    return rows;
   }
 
   void _showUpcomingHomeworkDialog() {
@@ -293,7 +350,7 @@ class _MyHomeworkPageState extends State<MyHomeworkPage> {
   }
 
   Widget _buildBody() {
-    if (_isInitialLoading) {
+    if (_isInitialLoading || _isLoadingPersonal) {
       return const Center(child: CircularProgressIndicator());
     }
 
@@ -301,7 +358,7 @@ class _MyHomeworkPageState extends State<MyHomeworkPage> {
       return _HomeworkMessage(text: _loadError!, color: Colors.grey.shade700);
     }
 
-    if (_rows.isEmpty) {
+    if (_rows.isEmpty && _personalRows.isEmpty) {
       return _HomeworkMessage(
         text: 'Δεν υπάρχουν καθήκοντα για αυτό το μάθημα.',
         color: Colors.grey.shade600,
@@ -343,7 +400,11 @@ class _MyHomeworkPageState extends State<MyHomeworkPage> {
           ],
         ),
         const SizedBox(height: 16),
-        _HomeworkTable(rows: _rows),
+        if (_personalRows.isNotEmpty) ...[
+          _PersonalHomeworkList(rows: _personalRows),
+          const SizedBox(height: 16),
+        ],
+        if (_rows.isNotEmpty) _HomeworkTable(rows: _rows),
         if (_loadError != null) ...[
           const SizedBox(height: 12),
           _HomeworkMessage(text: _loadError!, color: Colors.grey.shade700),
@@ -414,7 +475,9 @@ class _UpcomingHomeworkList extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  'Για ${row.formattedDate}',
+                  row.isPersonal
+                      ? 'Προσωπικό · Για ${row.formattedDate}'
+                      : 'Για ${row.formattedDate}',
                   style: const TextStyle(
                     color: _MyHomeworkPageState._contentColor,
                     fontSize: 13,
@@ -554,6 +617,66 @@ class _HomeworkTable extends StatelessWidget {
   }
 }
 
+class _PersonalHomeworkList extends StatelessWidget {
+  const _PersonalHomeworkList({required this.rows});
+
+  final List<_CurriculumRow> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF4EEFF),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: const Color(0xFFD9C7F5)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.person_rounded, color: Color(0xFF7B4CC9)),
+                SizedBox(width: 8),
+                Text(
+                  'Προσωπικά καθήκοντα',
+                  style: TextStyle(
+                    color: Color(0xFF7B4CC9),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            for (var index = 0; index < rows.length; index++) ...[
+              if (index > 0) const Divider(height: 22),
+              Text(
+                'Για ${rows[index].formattedDate}',
+                style: const TextStyle(
+                  color: Color(0xFF7B4CC9),
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 5),
+              Text(
+                rows[index].homework ?? '-',
+                style: const TextStyle(
+                  color: Color(0xFF313A2E),
+                  fontWeight: FontWeight.w700,
+                  height: 1.28,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _HomeworkMessage extends StatelessWidget {
   const _HomeworkMessage({required this.text, required this.color});
 
@@ -624,6 +747,7 @@ class _CurriculumRow {
     required this.forDate,
     required this.inClass,
     required this.homework,
+    required this.isPersonal,
   });
 
   factory _CurriculumRow.fromRow(Map<String, dynamic> row) {
@@ -632,6 +756,7 @@ class _CurriculumRow {
       forDate: DateTime.tryParse(row['for_date']?.toString() ?? ''),
       inClass: _readOptionalText(row['in_class']),
       homework: _readOptionalText(row['homework']),
+      isPersonal: row['is_personal'] == true,
     );
   }
 
@@ -639,6 +764,7 @@ class _CurriculumRow {
   final DateTime? forDate;
   final String? inClass;
   final String? homework;
+  final bool isPersonal;
 
   String get formattedCreatedAt => _formatShortDate(createdAt);
 

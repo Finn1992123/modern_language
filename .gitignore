@@ -49,3 +49,6 @@ app.*.map.json
 /android/key.properties
 /android/*.jks
 /android/*.keystore
+
+# Google Play publishing credentials (never commit service account keys)
+/.secrets/

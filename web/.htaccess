@@ -1,0 +1,9 @@
+# Flutter files use stable names across releases. Revalidate before reuse.
+# Covers Apache/LiteSpeed when files are served directly instead of Next.js.
+<IfModule mod_expires.c>
+  ExpiresActive Off
+</IfModule>
+<IfModule mod_headers.c>
+  Header unset Expires
+  Header set Cache-Control "no-cache, max-age=0, must-revalidate"
+</IfModule>

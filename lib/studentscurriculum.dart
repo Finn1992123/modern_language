@@ -16,6 +16,7 @@ class _StudentsCurriculumPageState extends State<StudentsCurriculumPage> {
   _TeacherClass? _selectedClass;
   List<_CurriculumRow> _rows = const [];
   bool _isLoadingRows = false;
+  String? _removingPersonalHomeworkId;
   String? _loadError;
 
   Future<List<_TeacherClass>> _loadClasses() async {
@@ -60,7 +61,7 @@ class _StudentsCurriculumPageState extends State<StudentsCurriculumPage> {
 
     try {
       final rows = await Supabase.instance.client.rpc(
-        'get_teacher_upcoming_curriculum_rows',
+        'get_teacher_upcoming_homework_rows',
         params: {
           'input_class_id': teacherClass.id,
           'input_from_date': _formatIsoDate(DateTime.now()),
@@ -92,6 +93,55 @@ class _StudentsCurriculumPageState extends State<StudentsCurriculumPage> {
         _loadError = 'Δεν μπορέσαμε να φορτώσουμε τα καθήκοντα.';
         _isLoadingRows = false;
       });
+    }
+  }
+
+  Future<void> _removePersonalHomework(_CurriculumRow row) async {
+    final id = row.personalHomeworkId;
+    if (id == null || _removingPersonalHomeworkId != null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Αφαίρεση καθήκοντος'),
+        content: Text(
+          'Να αφαιρεθεί το προσωπικό καθήκον του/της '
+          '${row.studentName ?? 'μαθητή'}; Δεν θα εμφανίζεται πλέον στον μαθητή.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Ακύρωση'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Αφαίρεση'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _removingPersonalHomeworkId = id);
+    try {
+      await Supabase.instance.client.rpc(
+        'remove_teacher_personal_homework',
+        params: {'input_personal_homework_id': id},
+      );
+      if (!mounted) return;
+      setState(() {
+        _rows = _rows.where((item) => item.personalHomeworkId != id).toList();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Το προσωπικό καθήκον αφαιρέθηκε.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Το καθήκον δεν αφαιρέθηκε: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _removingPersonalHomeworkId = null);
     }
   }
 
@@ -229,7 +279,13 @@ class _StudentsCurriculumPageState extends State<StudentsCurriculumPage> {
     return Column(
       children: [
         for (final row in _rows) ...[
-          _CurriculumCard(row: row),
+          _CurriculumCard(
+            row: row,
+            isRemoving: row.personalHomeworkId == _removingPersonalHomeworkId,
+            onRemove: row.isPersonal
+                ? () => _removePersonalHomework(row)
+                : null,
+          ),
           const SizedBox(height: 10),
         ],
       ],
@@ -289,9 +345,15 @@ class _ClassTile extends StatelessWidget {
 }
 
 class _CurriculumCard extends StatelessWidget {
-  const _CurriculumCard({required this.row});
+  const _CurriculumCard({
+    required this.row,
+    required this.isRemoving,
+    required this.onRemove,
+  });
 
   final _CurriculumRow row;
+  final bool isRemoving;
+  final VoidCallback? onRemove;
 
   @override
   Widget build(BuildContext context) {
@@ -308,20 +370,48 @@ class _CurriculumCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(
-                Icons.calendar_month_rounded,
-                color: _StudentsCurriculumPageState._contentColor,
+              Icon(
+                row.isPersonal
+                    ? Icons.person_rounded
+                    : Icons.calendar_month_rounded,
+                color: row.isPersonal
+                    ? const Color(0xFF7B4CC9)
+                    : _StudentsCurriculumPageState._contentColor,
                 size: 20,
               ),
               const SizedBox(width: 8),
-              Text(
-                row.formattedForDate,
-                style: const TextStyle(
-                  color: _StudentsCurriculumPageState._contentColor,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w900,
+              Expanded(
+                child: Text(
+                  row.isPersonal
+                      ? 'Προσωπικό · ${row.studentName ?? 'Μαθητής'} · ${row.formattedForDate}'
+                      : row.formattedForDate,
+                  style: TextStyle(
+                    color: row.isPersonal
+                        ? const Color(0xFF7B4CC9)
+                        : _StudentsCurriculumPageState._contentColor,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w900,
+                  ),
                 ),
               ),
+              if (onRemove != null)
+                isRemoving
+                    ? const SizedBox(
+                        width: 40,
+                        height: 40,
+                        child: Padding(
+                          padding: EdgeInsets.all(9),
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    : IconButton(
+                        tooltip: 'Αφαίρεση',
+                        onPressed: onRemove,
+                        icon: const Icon(
+                          Icons.delete_outline_rounded,
+                          color: Colors.redAccent,
+                        ),
+                      ),
             ],
           ),
           if (row.inClass != null) ...[
@@ -471,22 +561,31 @@ class _TeacherClass {
 
 class _CurriculumRow {
   const _CurriculumRow({
+    required this.personalHomeworkId,
     required this.forDate,
     required this.inClass,
     required this.homework,
+    required this.isPersonal,
+    required this.studentName,
   });
 
   factory _CurriculumRow.fromRow(Map<String, dynamic> row) {
     return _CurriculumRow(
+      personalHomeworkId: _readText(row['personal_homework_id']),
       forDate: DateTime.tryParse(row['for_date']?.toString() ?? ''),
       inClass: _readText(row['in_class']),
       homework: _readText(row['homework']),
+      isPersonal: row['is_personal'] == true,
+      studentName: _readText(row['student_name']),
     );
   }
 
+  final String? personalHomeworkId;
   final DateTime? forDate;
   final String? inClass;
   final String? homework;
+  final bool isPersonal;
+  final String? studentName;
 
   String get formattedForDate => _formatShortDate(forDate);
 }

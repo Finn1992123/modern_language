@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'register.dart';
 
 const _authRedirectUrl = 'modernlanguage://login-callback/';
+const _webAuthRedirectUrl = 'https://modernlanguage.gr/app/';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -83,7 +84,7 @@ class _LoginPageState extends State<LoginPage> {
     try {
       final didLaunch = await Supabase.instance.client.auth.signInWithOAuth(
         OAuthProvider.google,
-        redirectTo: kIsWeb ? null : _authRedirectUrl,
+        redirectTo: kIsWeb ? _webAuthRedirectUrl : _authRedirectUrl,
         authScreenLaunchMode: kIsWeb
             ? LaunchMode.platformDefault
             : LaunchMode.externalApplication,
