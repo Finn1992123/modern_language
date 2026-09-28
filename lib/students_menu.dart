@@ -30,16 +30,16 @@ class StudentsMenuPage extends StatefulWidget {
 }
 
 class _StudentsMenuPageState extends State<StudentsMenuPage> {
-  late final Future<List<_ClassGradeBreakdown>> _gradesFuture =
+  late final Future<List<_LanguageGradeBreakdown>> _gradesFuture =
       _loadGradeBreakdown();
 
-  Future<List<_ClassGradeBreakdown>> _loadGradeBreakdown() async {
+  Future<List<_LanguageGradeBreakdown>> _loadGradeBreakdown() async {
     if (widget.studentId.isEmpty) {
       return const [];
     }
 
     final rows = await Supabase.instance.client.rpc(
-      'get_student_language_averages',
+      'get_student_language_summaries',
       params: {'input_student_id': widget.studentId},
     );
 
@@ -50,7 +50,8 @@ class _StudentsMenuPageState extends State<StudentsMenuPage> {
     return rows
         .whereType<Map>()
         .map(
-          (row) => _ClassGradeBreakdown.fromRow(Map<String, dynamic>.from(row)),
+          (row) =>
+              _LanguageGradeBreakdown.fromRow(Map<String, dynamic>.from(row)),
         )
         .where((breakdown) => breakdown.language.isNotEmpty)
         .toList()
@@ -114,7 +115,7 @@ class _StudentsMenuPageState extends State<StudentsMenuPage> {
                 ),
               ),
               const SizedBox(height: 18),
-              FutureBuilder<List<_ClassGradeBreakdown>>(
+              FutureBuilder<List<_LanguageGradeBreakdown>>(
                 future: _gradesFuture,
                 builder: (context, snapshot) {
                   if (snapshot.connectionState != ConnectionState.done) {
@@ -169,7 +170,7 @@ class _GradeBreakdownCard extends StatelessWidget {
     required this.accentColor,
   });
 
-  final _ClassGradeBreakdown breakdown;
+  final _LanguageGradeBreakdown breakdown;
   final String studentId;
   final Color accentColor;
 
@@ -178,7 +179,7 @@ class _GradeBreakdownCard extends StatelessWidget {
       MaterialPageRoute<void>(
         builder: (context) => MyGradesPage(
           studentId: studentId,
-          classId: breakdown.classId,
+          language: breakdown.language,
           languageLabel: _languageLabel(breakdown.language),
         ),
       ),
@@ -190,55 +191,88 @@ class _GradeBreakdownCard extends StatelessWidget {
       MaterialPageRoute<void>(
         builder: (context) => MyHomeworkPage(
           studentId: studentId,
-          classId: breakdown.classId,
+          language: breakdown.language,
           languageLabel: _languageLabel(breakdown.language),
         ),
       ),
     );
   }
 
-  void _openMyAchievements(BuildContext context) {
+  Future<_StudentClass?> _chooseClass(BuildContext context) {
+    if (breakdown.classes.length == 1) {
+      return Future.value(breakdown.classes.single);
+    }
+    return showModalBottomSheet<_StudentClass>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            const ListTile(title: Text('Επίλεξε τμήμα')),
+            for (final studentClass in breakdown.classes)
+              ListTile(
+                title: Text(studentClass.name),
+                subtitle: studentClass.daysHours == null
+                    ? null
+                    : Text(studentClass.daysHours!),
+                onTap: () => Navigator.of(context).pop(studentClass),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openMyAchievements(BuildContext context) async {
+    final studentClass = await _chooseClass(context);
+    if (studentClass == null || !context.mounted) return;
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (context) => MyAchievementsPage(
           studentId: studentId,
-          classId: breakdown.classId,
+          classId: studentClass.id,
           languageLabel: _languageLabel(breakdown.language),
-          showJuniorAchievements: breakdown.supportsJuniorAchievements,
+          showJuniorAchievements: studentClass.supportsJuniorAchievements,
         ),
       ),
     );
   }
 
   Future<void> _openMyExercises(BuildContext context) async {
+    final studentClass = await _chooseClass(context);
+    if (studentClass == null || !context.mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (context) => MyExercisesPage(
           studentId: studentId,
-          classId: breakdown.classId,
+          classId: studentClass.id,
           languageLabel: _languageLabel(breakdown.language),
         ),
       ),
     );
   }
 
-  void _openGames(BuildContext context) {
+  Future<void> _openGames(BuildContext context) async {
+    final studentClass = await _chooseClass(context);
+    if (studentClass == null || !context.mounted) return;
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (context) => GamesPage(
           studentId: studentId,
-          classId: breakdown.classId,
+          classId: studentClass.id,
           languageLabel: _languageLabel(breakdown.language),
         ),
       ),
     );
   }
 
-  void _openJoinRoom(BuildContext context) {
+  Future<void> _openJoinRoom(BuildContext context) async {
+    final studentClass = await _chooseClass(context);
+    if (studentClass == null || !context.mounted) return;
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (context) =>
-            JoinRoomPage(studentId: studentId, classId: breakdown.classId),
+            JoinRoomPage(studentId: studentId, classId: studentClass.id),
       ),
     );
   }
@@ -276,10 +310,13 @@ class _GradeBreakdownCard extends StatelessWidget {
                         color: Color(0xFF173A8A),
                       ),
                     ),
-                    if (breakdown.daysHours != null) ...[
+                    for (final studentClass in breakdown.classes) ...[
                       const SizedBox(height: 3),
                       Text(
-                        breakdown.daysHours!,
+                        [studentClass.name, studentClass.daysHours]
+                            .whereType<String>()
+                            .where((value) => value.isNotEmpty)
+                            .join(' · '),
                         style: TextStyle(
                           color: Colors.grey.shade700,
                           fontSize: 13,
@@ -310,7 +347,7 @@ class _GradeBreakdownCard extends StatelessWidget {
           const SizedBox(height: 16),
           _LessonActionGrid(
             studentId: studentId,
-            classId: breakdown.classId,
+            classIds: breakdown.classes.map((value) => value.id).toList(),
             onGradesTap: () => _openMyGrades(context),
             onHomeworkTap: () => _openMyHomework(context),
             onAchievementsTap: () => _openMyAchievements(context),
@@ -327,7 +364,7 @@ class _GradeBreakdownCard extends StatelessWidget {
 class _LessonActionGrid extends StatelessWidget {
   const _LessonActionGrid({
     required this.studentId,
-    required this.classId,
+    required this.classIds,
     required this.onGradesTap,
     required this.onHomeworkTap,
     required this.onAchievementsTap,
@@ -337,7 +374,7 @@ class _LessonActionGrid extends StatelessWidget {
   });
 
   final String studentId;
-  final String classId;
+  final List<String> classIds;
   final VoidCallback onGradesTap;
   final VoidCallback onHomeworkTap;
   final VoidCallback onAchievementsTap;
@@ -381,7 +418,7 @@ class _LessonActionGrid extends StatelessWidget {
             ),
             _PendingExercisesTile(
               studentId: studentId,
-              classId: classId,
+              classIds: classIds,
               onTap: onExercisesTap,
             ),
           ],
@@ -499,12 +536,12 @@ class _LessonActionTile extends StatelessWidget {
 class _PendingExercisesTile extends StatefulWidget {
   const _PendingExercisesTile({
     required this.studentId,
-    required this.classId,
+    required this.classIds,
     required this.onTap,
   });
 
   final String studentId;
-  final String classId;
+  final List<String> classIds;
   final Future<void> Function() onTap;
 
   @override
@@ -515,18 +552,22 @@ class _PendingExercisesTileState extends State<_PendingExercisesTile> {
   late Future<int> _countFuture = _loadCount();
 
   Future<int> _loadCount() async {
-    final rows = await Supabase.instance.client.rpc(
-      'get_student_exercise_assignments',
-      params: {
-        'input_student_id': widget.studentId,
-        'input_class_id': widget.classId,
-      },
+    final results = await Future.wait([
+      for (final classId in widget.classIds)
+        Supabase.instance.client.rpc(
+          'get_student_exercise_assignments',
+          params: {
+            'input_student_id': widget.studentId,
+            'input_class_id': classId,
+          },
+        ),
+    ]);
+    return results.whereType<List>().fold<int>(
+      0,
+      (count, rows) =>
+          count +
+          rows.whereType<Map>().where((row) => row['completed'] != true).length,
     );
-    if (rows is! List) return 0;
-    return rows
-        .whereType<Map>()
-        .where((row) => row['completed'] != true)
-        .length;
   }
 
   Future<void> _openExercises() async {
@@ -714,12 +755,10 @@ class _InfoPanel extends StatelessWidget {
   }
 }
 
-class _ClassGradeBreakdown {
-  const _ClassGradeBreakdown({
-    required this.classId,
-    required this.className,
+class _LanguageGradeBreakdown {
+  const _LanguageGradeBreakdown({
+    required this.classes,
     required this.language,
-    required this.daysHours,
     required this.reading,
     required this.vocabulary,
     required this.grammar,
@@ -731,19 +770,19 @@ class _ClassGradeBreakdown {
     required this.overall,
   });
 
-  factory _ClassGradeBreakdown.fromRow(Map<String, dynamic> row) {
-    final classId = row['class_id'];
-    final className = row['class_name'];
+  factory _LanguageGradeBreakdown.fromRow(Map<String, dynamic> row) {
     final language = row['language'];
-    final daysHours = row['days_hours'];
+    final classes = row['classes'];
 
-    return _ClassGradeBreakdown(
-      classId: classId is String ? classId : '',
-      className: className is String ? className.trim() : '',
+    return _LanguageGradeBreakdown(
+      classes: classes is List
+          ? classes
+                .whereType<Map>()
+                .map(_StudentClass.fromRow)
+                .where((value) => value.id.isNotEmpty)
+                .toList()
+          : const [],
       language: language is String ? language.trim().toLowerCase() : '',
-      daysHours: daysHours is String && daysHours.trim().isNotEmpty
-          ? daysHours.trim()
-          : null,
       reading: _readGrade(row['reading']),
       vocabulary: _readGrade(row['vocabulary']),
       grammar: _readGrade(row['grammar']),
@@ -756,10 +795,8 @@ class _ClassGradeBreakdown {
     );
   }
 
-  final String classId;
-  final String className;
+  final List<_StudentClass> classes;
   final String language;
-  final String? daysHours;
   final double? reading;
   final double? vocabulary;
   final double? grammar;
@@ -769,9 +806,6 @@ class _ClassGradeBreakdown {
   final double? homework;
   final double? effort;
   final double? overall;
-
-  bool get supportsJuniorAchievements =>
-      RegExp(r'^(JA|JB|SA|SB)').hasMatch(className.trim().toUpperCase());
 
   List<_GradeItem> get items => [
     _GradeItem('Reading', reading),
@@ -783,6 +817,26 @@ class _ClassGradeBreakdown {
     _GradeItem('Homework', homework),
     _GradeItem('Effort', effort),
   ];
+}
+
+class _StudentClass {
+  const _StudentClass({required this.id, required this.name, this.daysHours});
+
+  factory _StudentClass.fromRow(Map row) {
+    final schedule = row['days_hours']?.toString().trim() ?? '';
+    return _StudentClass(
+      id: row['class_id']?.toString() ?? '',
+      name: row['class_name']?.toString().trim() ?? '',
+      daysHours: schedule.isEmpty ? null : schedule,
+    );
+  }
+
+  final String id;
+  final String name;
+  final String? daysHours;
+
+  bool get supportsJuniorAchievements =>
+      RegExp(r'^(JA|JB|SA|SB)').hasMatch(name.toUpperCase());
 }
 
 class _GradeItem {

@@ -5,12 +5,12 @@ class MyGradesPage extends StatefulWidget {
   const MyGradesPage({
     super.key,
     required this.studentId,
-    required this.classId,
+    required this.language,
     required this.languageLabel,
   });
 
   final String studentId;
-  final String classId;
+  final String language;
   final String languageLabel;
 
   @override
@@ -39,7 +39,7 @@ class _MyGradesPageState extends State<MyGradesPage> {
       return;
     }
 
-    if (widget.studentId.isEmpty || widget.classId.isEmpty) {
+    if (widget.studentId.isEmpty || widget.language.isEmpty) {
       setState(() {
         _isInitialLoading = false;
         _hasMore = false;
@@ -58,10 +58,10 @@ class _MyGradesPageState extends State<MyGradesPage> {
 
     try {
       final rows = await Supabase.instance.client.rpc(
-        'get_student_grade_rows',
+        'get_student_language_grade_rows',
         params: {
           'input_student_id': widget.studentId,
-          'input_class_id': widget.classId,
+          'input_language': widget.language,
           'input_limit': _pageSize,
           'input_offset': isInitialLoad ? 0 : _grades.length,
         },
@@ -407,6 +407,17 @@ class _GradesTable extends StatelessWidget {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    if (grade.className != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                          grade.className!,
+                          style: const TextStyle(
+                            color: _MyGradesPageState._contentColor,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
                     _buildGradeTable(
                       _buildRow([
                         grade.formattedDate,
@@ -588,6 +599,7 @@ class _StudentGradeRow {
     required this.homework,
     required this.effort,
     required this.comments,
+    required this.className,
   });
 
   factory _StudentGradeRow.fromRow(Map<String, dynamic> row) {
@@ -602,6 +614,7 @@ class _StudentGradeRow {
       homework: _readGrade(row['homework']),
       effort: _readGrade(row['effort']),
       comments: _readOptionalText(row['comments']),
+      className: _readOptionalText(row['class_name']),
     );
   }
 
@@ -615,6 +628,7 @@ class _StudentGradeRow {
   final double? homework;
   final double? effort;
   final String? comments;
+  final String? className;
 
   String get formattedDate {
     final date = createdAt;

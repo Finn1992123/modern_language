@@ -425,7 +425,7 @@ join import_users parent
   on parent.connect_code = student.user_connect_code
 join import_classes class
   on class.class_ref = enrollment.class_ref
-on conflict (student_id) do update
+on conflict (student_id, class_id) do update
 set
   parent_name = excluded.parent_name,
   student_name = excluded.student_name,
