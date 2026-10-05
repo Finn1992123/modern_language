@@ -77,6 +77,7 @@ class FinancialDebtor {
     required this.userName,
     required this.payment,
     required this.month,
+    this.childrenNames = const [],
   });
 
   factory FinancialDebtor.fromRow(Map<String, dynamic> row) => FinancialDebtor(
@@ -84,12 +85,20 @@ class FinancialDebtor {
     userName: readText(row['user_name'], fallback: 'Χρήστης'),
     payment: readAmount(row['payment']),
     month: row['month']?.toString() ?? '',
+    childrenNames: row['children_names'] is List
+        ? (row['children_names'] as List)
+              .whereType<String>()
+              .map((name) => name.trim())
+              .where((name) => name.isNotEmpty)
+              .toList(growable: false)
+        : const [],
   );
 
   final String userId;
   final String userName;
   final double payment;
   final String month;
+  final List<String> childrenNames;
 }
 
 class RepeatedFinancialDebtor {

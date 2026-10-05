@@ -23,6 +23,7 @@ void main() {
           'user_name': 'Tonia Kontaxi',
           'payment': '100',
           'month': 'august',
+          'children_names': ['Maria Kontaxi', 'Nikos Kontaxis'],
         },
       ],
       'repeated_debtors': [
@@ -42,7 +43,25 @@ void main() {
     expect(dashboard.expenses, 125.5);
     expect(dashboard.netProfit, 624.5);
     expect(dashboard.debtors.single.userName, 'Tonia Kontaxi');
+    expect(dashboard.debtors.single.childrenNames, [
+      'Maria Kontaxi',
+      'Nikos Kontaxis',
+    ]);
     expect(dashboard.repeatedDebtors.single.unpaidCount, 2);
+  });
+
+  test('debtor tolerates missing children and ignores blank names', () {
+    expect(FinancialDebtor.fromRow({}).childrenNames, isEmpty);
+    expect(
+      FinancialDebtor.fromRow({'children_names': null}).childrenNames,
+      isEmpty,
+    );
+    expect(
+      FinancialDebtor.fromRow({
+        'children_names': [' Maria ', '', null, '  ', 'Nikos'],
+      }).childrenNames,
+      ['Maria', 'Nikos'],
+    );
   });
 
   test('money formatting keeps cents and negative values', () {

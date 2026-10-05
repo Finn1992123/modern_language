@@ -415,7 +415,9 @@ class _Content extends StatelessWidget {
                           debtor.userName,
                           style: const TextStyle(fontWeight: FontWeight.w800),
                         ),
-                        subtitle: const Text('Απλήρωτος επιλεγμένος μήνας'),
+                        subtitle: debtor.childrenNames.isEmpty
+                            ? null
+                            : Text(debtor.childrenNames.join(', ')),
                         trailing: _AmountAction(
                           amount: debtor.payment,
                           onPressed: () => openPayments(debtor.userId),
