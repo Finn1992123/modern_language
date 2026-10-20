@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'class_order.dart';
+
 class TeacherPersonalHomeworkPage extends StatefulWidget {
   const TeacherPersonalHomeworkPage({super.key});
 
@@ -40,7 +42,8 @@ class _TeacherPersonalHomeworkPageState
         .whereType<Map>()
         .map((row) => _TeacherClass.fromRow(Map<String, dynamic>.from(row)))
         .where((item) => item.id.isNotEmpty)
-        .toList();
+        .toList()
+      ..sort((a, b) => compareClassNames(a.name, b.name));
   }
 
   Future<void> _selectClass(_TeacherClass? teacherClass) async {

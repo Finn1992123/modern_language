@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'class_order.dart';
+
 class TeacherClassesPage extends StatefulWidget {
   const TeacherClassesPage({super.key});
 
@@ -71,7 +73,8 @@ class _TeacherClassesPageState extends State<TeacherClassesPage> {
                   )
                   .where((item) => item.id.isNotEmpty)
                   .toList()
-            : const [];
+            : [];
+        _classes.sort((a, b) => compareClassNames(a.name, b.name));
         _completedClassIds
           ..clear()
           ..addAll(completedClassIds);
