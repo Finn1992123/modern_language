@@ -10,8 +10,15 @@ class AppViewport extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ColoredBox(
-      color: const Color(0xFFF0F3F8),
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Colors.white, Color(0xFF39D2C0)],
+          stops: [0.3, 1],
+        ),
+      ),
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 1000),
@@ -38,6 +45,7 @@ class ResponsiveMenuGrid extends StatelessWidget {
     this.maxTileHeight = 200,
     this.minTileHeight = 170,
     this.aspectRatio = 1,
+    this.columnCount,
   });
 
   final List<Widget> children;
@@ -45,15 +53,18 @@ class ResponsiveMenuGrid extends StatelessWidget {
   final double maxTileHeight;
   final double minTileHeight;
   final double aspectRatio;
+  final int? columnCount;
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final columns = math.max(
-          2,
-          ((constraints.maxWidth + spacing) / (220 + spacing)).floor(),
-        );
+        final columns =
+            columnCount ??
+            math.max(
+              2,
+              ((constraints.maxWidth + spacing) / (220 + spacing)).floor(),
+            );
         final width =
             (constraints.maxWidth - spacing * (columns - 1)) / columns;
         return GridView.count(

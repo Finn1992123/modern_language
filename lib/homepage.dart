@@ -215,6 +215,7 @@ class _HomePageState extends State<HomePage>
                   ),
                   const SizedBox(height: 28),
                   ResponsiveMenuGrid(
+                    columnCount: 2,
                     children: [
                       _AnimatedMenuCard(
                         controller: _animationController,

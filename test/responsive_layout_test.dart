@@ -22,6 +22,7 @@ void main() {
                   padding: const EdgeInsets.all(20),
                   children: [
                     ResponsiveMenuGrid(
+                      columnCount: 2,
                       children: List.generate(
                         3,
                         (index) => ColoredBox(
@@ -48,11 +49,19 @@ void main() {
       expect(viewport!.width, width > 1000 ? 1000 : width);
       expect(second.left - first.right, closeTo(18, 0.01));
       expect(first.height, lessThanOrEqualTo(200));
-      if (width >= 768) {
-        expect(third.top, first.top);
-      } else {
-        expect(third.top - first.bottom, closeTo(18, 0.01));
-      }
+      expect(third.top - first.bottom, closeTo(18, 0.01));
+      final backdrop = tester.widget<DecoratedBox>(
+        find
+            .descendant(
+              of: find.byType(AppViewport),
+              matching: find.byType(DecoratedBox),
+            )
+            .first,
+      );
+      expect(tester.getSize(find.byWidget(backdrop)).width, width);
+      final gradient =
+          (backdrop.decoration as BoxDecoration).gradient! as LinearGradient;
+      expect(gradient.colors, [Colors.white, const Color(0xFF39D2C0)]);
       expect(
         tester.getRect(find.byKey(const ValueKey('following-section'))).bottom,
         lessThan(900),
