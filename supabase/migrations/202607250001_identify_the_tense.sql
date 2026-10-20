@@ -33,6 +33,7 @@ on public.tense_questions(language, is_active)
 where is_active = true;
 
 alter table public.tense_questions enable row level security;
+grant select on table public.tense_questions to authenticated;
 
 drop policy if exists "Authenticated users can read active tense questions"
 on public.tense_questions;

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'responsive_layout.dart';
 import 'games.dart';
 import 'join_room_page.dart';
 import 'myachievements.dart';
@@ -387,13 +388,11 @@ class _LessonActionGrid extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        GridView.count(
-          crossAxisCount: 2,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          mainAxisSpacing: 10,
-          crossAxisSpacing: 10,
-          childAspectRatio: 1.55,
+        ResponsiveMenuGrid(
+          spacing: 10,
+          maxTileHeight: 150,
+          minTileHeight: 110,
+          aspectRatio: 1.55,
           children: [
             _LessonActionTile(
               label: 'Οι βαθμοί μου',

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'responsive_layout.dart';
 import 'announcements.dart';
 import 'library.dart';
 import 'payments.dart';
@@ -213,13 +214,7 @@ class _HomePageState extends State<HomePage>
                     ],
                   ),
                   const SizedBox(height: 28),
-                  GridView.count(
-                    crossAxisCount: 2,
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    mainAxisSpacing: 18,
-                    crossAxisSpacing: 18,
-                    childAspectRatio: 1,
+                  ResponsiveMenuGrid(
                     children: [
                       _AnimatedMenuCard(
                         controller: _animationController,
@@ -336,8 +331,8 @@ class _MenuCard extends StatelessWidget {
     return Align(
       alignment: Alignment.centerLeft,
       child: SizedBox(
-        width: 200,
-        height: 200,
+        width: double.infinity,
+        height: double.infinity,
         child: Material(
           color: backgroundColor,
           borderRadius: BorderRadius.circular(_homeCardRadius),

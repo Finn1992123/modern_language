@@ -34,6 +34,8 @@ where is_active = true;
 
 alter table public.study_gram_topics enable row level security;
 alter table public.study_gram_questions enable row level security;
+grant select on table public.study_gram_topics, public.study_gram_questions
+to authenticated;
 
 drop policy if exists study_gram_topics_read_authenticated
 on public.study_gram_topics;

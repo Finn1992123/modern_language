@@ -224,6 +224,10 @@ create index if not exists push_notification_devices_auth_user_idx
 on public.push_notification_devices(auth_user_id);
 
 alter table public.push_notification_devices enable row level security;
+-- Direct Data API operations used by send-announcement-notification.
+grant select, delete on table public.push_notification_devices to service_role;
+grant select on table public.announcements to service_role;
+grant update (push_sent_at) on public.announcements to service_role;
 
 create or replace function public.register_push_notification_device(
   input_token text,

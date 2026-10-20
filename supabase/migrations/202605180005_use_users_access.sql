@@ -18,6 +18,9 @@ create index if not exists user_access_user_id_idx
 on public.user_access(user_id);
 
 alter table public.user_access enable row level security;
+-- Required by the user/student RLS policies as well as direct API reads.
+grant select on table public.user_access, public.users, public.students
+to authenticated;
 
 drop policy if exists "Users can view their own access"
 on public.user_access;

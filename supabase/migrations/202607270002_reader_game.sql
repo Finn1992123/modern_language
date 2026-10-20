@@ -50,6 +50,8 @@ where is_active = true;
 
 alter table public.reader_passages enable row level security;
 alter table public.reader_questions enable row level security;
+grant select on table public.reader_passages, public.reader_questions
+to authenticated;
 
 drop policy if exists reader_passages_read_authenticated
 on public.reader_passages;

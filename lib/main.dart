@@ -8,6 +8,7 @@ import 'connect_code_page.dart';
 import 'homepage.dart';
 import 'login.dart';
 import 'push_notification_service.dart';
+import 'responsive_layout.dart';
 
 const supabaseUrl = 'https://vjgvvcjtrptkgiyowuvx.supabase.co';
 const supabaseAnonKey =
@@ -36,6 +37,8 @@ class MyApp extends StatelessWidget {
       navigatorKey: rootNavigatorKey,
       title: 'Modern Language',
       debugShowCheckedModeBanner: false,
+      builder: (context, child) =>
+          AppViewport(child: child ?? const SizedBox.shrink()),
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
           seedColor: const Color(0xFF2F6BFF),

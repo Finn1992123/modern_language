@@ -7,6 +7,7 @@ create table if not exists public.cefr_books (
 );
 
 alter table public.cefr_books enable row level security;
+grant select on table public.cefr_books to authenticated;
 
 drop policy if exists cefr_books_select_authenticated
 on public.cefr_books;
@@ -39,6 +40,7 @@ create table if not exists public.vocabulary_words (
 );
 
 alter table public.vocabulary_words enable row level security;
+grant select on table public.vocabulary_words to authenticated;
 
 drop policy if exists vocabulary_words_select_authenticated
 on public.vocabulary_words;
